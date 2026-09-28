@@ -1,6 +1,6 @@
 ---
 id: 20260928-rate-limit-login
-status: draft
+status: shipped
 touches: [src/, tests/]
 ---
 # Rate-limit failed logins
@@ -16,3 +16,4 @@ No new dependencies.
 - The 6th failed login from one IP within 60s is refused, and other IPs are unaffected
   check: `python3 -m unittest discover -s tests -v`
 - Failures older than 60s stop counting
+  check: `python3 -m unittest tests.test_ratelimit.WindowTest -v`

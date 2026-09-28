@@ -38,5 +38,25 @@ class BlockTest(unittest.TestCase):
         self.assertTrue(rl.allowed("1.2.3.4"))
 
 
+class WindowTest(unittest.TestCase):
+    def test_failures_older_than_window_stop_counting(self):
+        clock = FakeClock()
+        rl = LoginRateLimiter(clock=clock)
+        for _ in range(5):
+            rl.record_failure("1.2.3.4")
+        self.assertFalse(rl.allowed("1.2.3.4"))
+        clock.t = 60.5
+        self.assertTrue(rl.allowed("1.2.3.4"))
+
+    def test_failures_inside_window_still_count(self):
+        clock = FakeClock()
+        rl = LoginRateLimiter(clock=clock)
+        for i in range(5):
+            clock.t = i * 10.0
+            rl.record_failure("1.2.3.4")
+        clock.t = 59.0
+        self.assertFalse(rl.allowed("1.2.3.4"))
+
+
 if __name__ == "__main__":
     unittest.main()
