@@ -146,7 +146,7 @@ jobs:
       - uses: actions/checkout@v5
         with: {fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}"}
       - uses: SM260845/intent-first@main   # intent-check, then proof-check
-        with: {run-checks: "true"}
+        with: {run-checks: "true", require-proof: "false"}  # "true" fails PRs with no sealed session
 ```
 
 The intent says why, the sealed session in `.proof/<intent>.json` shows how the agent got there, and the diff is checked against both. PRs without a proof still need an intent and pass the proof step with a notice.

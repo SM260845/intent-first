@@ -272,10 +272,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
     ap.add_argument("--head", required=True)
+    ap.add_argument("--require-proof", action="store_true", help="fail PRs that carry no proof bundle")
     a = ap.parse_args()
     changed = [p for p in git("diff", "--name-only", "--diff-filter=AM", "--no-renames", a.base, a.head).splitlines()
                if p.startswith(".proof/") and p.endswith(".json")]
     if not changed:
+        if a.require_proof:
+            print("::error::no proof bundle in this PR (.proof/<intent>.json) and --require-proof is set")
+            return 1
         print("::notice::no proof bundle in this PR; treated as human-authored")
         return 0
     pr_commits = set(git("rev-list", "%s..%s" % (a.base, a.head)).splitlines())

@@ -5,6 +5,9 @@ inputs:
   run-checks:
     description: Also run the `check:` commands listed in the intent's "Done when" section.
     default: "true"
+  require-proof:
+    description: Fail PRs that carry no sealed session proof (.proof/<intent>.json).
+    default: "false"
 runs:
   using: composite
   steps:
@@ -27,4 +30,5 @@ runs:
       run: |
         python3 "${{ github.action_path }}/scripts/proof_check.py" \
           --base "${{ github.event.pull_request.base.sha }}" \
-          --head "${{ github.event.pull_request.head.sha }}"
+          --head "${{ github.event.pull_request.head.sha }}" \
+          ${{ inputs.require-proof == 'true' && '--require-proof' || '' }}

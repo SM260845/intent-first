@@ -201,6 +201,16 @@ class ProofCheckCli(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn(f"OK   .proof/{NAME}.json", out)
 
+    def test_require_proof_fails_without_bundle(self):
+        r = Repo()
+        r.add_feature()
+        code, _ = r.check()
+        self.assertEqual(code, 0)
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY")}
+        p = subprocess.run([sys.executable, CHECK, "--base", r.base, "--head", r.rev(), "--require-proof"],
+                           cwd=r.d, capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
     def test_missing_intent_fails(self):
         r = Repo()
         r.write("src/a.py", "print(1)\n")
