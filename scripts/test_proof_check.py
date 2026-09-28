@@ -185,6 +185,12 @@ class ProofCheck(unittest.TestCase):
         b["batches"][0]["tsa"]["tsr"] = base64.b64encode(forged).decode()
         self.assertTrue(any("timestamp" in e.lower() for e in verify_bundle(b, NAME)[0]))
 
+    def test_unstamped_tail_batch_fails(self):
+        b = copy.deepcopy(self.b)
+        last = b["batches"][-1]
+        b["batches"].append({"from": last["to"] + 1, "to": last["to"], "prevRoot": last["root"], "root": last["root"]})
+        self.assertTrue(any("latest batch" in e for e in verify_bundle(b, NAME)[0]))
+
 
 class ProofCheckCli(unittest.TestCase):
     def test_valid_bundle_passes_pr_checks(self):

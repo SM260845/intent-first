@@ -246,8 +246,13 @@ def verify_bundle(b, name):
         prev_root, nxt = bt["root"], bt["to"] + 1
     if nxt < expect:
         errors.append("%d event(s) are not covered by a Merkle batch" % (expect - nxt))
+    batches = b.get("batches", [])
     if not stamped:
         warnings.append("no RFC 3161 timestamp; the chain is only locally sealed")
+    elif not batches[-1].get("tsa"):
+        # The hash chain means a timestamp on the last batch covers every earlier event;
+        # an unstamped tail could be rewritten without touching an earlier timestamp.
+        errors.append("latest batch is not timestamped; events after the last timestamp are only locally sealed")
     links = [e for e in b.get("events", []) if e.get("type") == "note" and (e.get("payload") or {}).get("kind") == "proof.link"]
     if not links:
         errors.append("no sealed proof.link event")
