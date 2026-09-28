@@ -4,7 +4,7 @@ from collections import defaultdict
 
 
 class LoginRateLimiter:
-    def __init__(self, max_failures=5, window_seconds=60, clock=time.monotonic):
+    def __init__(self, max_failures=10, window_seconds=60, clock=time.monotonic):
         self.max_failures = max_failures
         self.window = window_seconds
         self.clock = clock

@@ -6,7 +6,7 @@ touches: [src/, tests/]
 # Rate-limit failed logins
 
 ## Want
-Max 5 failed logins per IP per minute. The 6th attempt inside the window is refused.
+Max 10 failed logins per IP per minute. The 6th attempt inside the window is refused.
 
 ## Not
 No CAPTCHA. No lockout for users who log in successfully: a success clears the IP's counter.
