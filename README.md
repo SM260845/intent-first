@@ -132,3 +132,21 @@ Every PR body carries its `Intent:` id and commit SHA(s). Every merge commit car
 
 Code is becoming output. Intent is the source.
 A repo that keeps only output is a binary with comments.
+
+## One action for why, how and what
+
+Other repos can use both gates in one step. Add `.intent/` files as usual, and have the agent run `agent-session-recorder bundle <session> --intent <id> --timestamp` before opening the PR:
+
+```yaml
+on: {pull_request: {types: [opened, synchronize, reopened, edited]}}
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}"}
+      - uses: SM260845/intent-first@main   # intent-check, then proof-check
+        with: {run-checks: "true"}
+```
+
+The intent says why, the sealed session in `.proof/<intent>.json` shows how the agent got there, and the diff is checked against both. PRs without a proof still need an intent and pass the proof step with a notice.
