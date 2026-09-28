@@ -11,7 +11,7 @@ jobs:
   intent-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
@@ -32,6 +32,6 @@ jobs:
   selftest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: intent-check self-test (fixtures incl. junk "hi" intent)
         run: python3 scripts/test_intent_check.py
