@@ -104,7 +104,7 @@ git add .proof/ && git commit -m "proof for 20260928-rate-limit-login"
 
 `bundle` (from [agent-session-recorder](https://github.com/SM260845/agent-session-recorder)) writes a `proof.link` event naming the intent and the current commit into the sealed session, Merkle-batches it with an RFC 3161 timestamp, and saves `.proof/<intent-id>.json`.
 
-[`scripts/proof_check.py`](scripts/proof_check.py) re-implements the verifier independently, with no dependencies, and fails the PR if:
+[`scripts/proof_check.py`](scripts/proof_check.py) re-implements the verifier independently with no third-party Python packages, requires the `openssl` executable for RFC 3161 checks, and fails the PR if:
 
 - any session event was edited, dropped, inserted or reordered
 - any event isn't covered by a Merkle batch, or a timestamp doesn't cover its batch

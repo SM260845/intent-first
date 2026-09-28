@@ -168,6 +168,15 @@ class ProofCheck(unittest.TestCase):
             canonical([1e-7, 1e-6, 1e20, 1e21, -0.0, float("nan"), float("inf"), -float("inf")]),
             "[1e-7,0.000001,100000000000000000000,1e+21,0,null,null,null]",
         )
+        self.assertEqual(
+            canonical({
+                "\uE000": "bmp",
+                "\U0001F600": "astral",
+                "\ud800": "surrogate",
+                "text": "\ud800 😀",
+            }),
+            '{"text":"\\ud800 😀","\\ud800":"surrogate","😀":"astral","":"bmp"}',
+        )
 
     def test_forged_timestamp_fails(self):
         b = copy.deepcopy(self.b)

@@ -105,6 +105,37 @@ def js_number(v):
     return mantissa + "e" + ("+" if exponent > 0 else "") + str(exponent)
 
 
+def js_string(v):
+    """Match JavaScript's JSON.stringify escaping, including lone surrogates."""
+    out = ['"']
+    for ch in v:
+        code = ord(ch)
+        if ch == '"':
+            out.append('\\"')
+        elif ch == "\\":
+            out.append("\\\\")
+        elif ch == "\b":
+            out.append("\\b")
+        elif ch == "\f":
+            out.append("\\f")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif code < 0x20 or 0xD800 <= code <= 0xDFFF:
+            out.append("\\u%04x" % code)
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+def utf16_sort_key(v):
+    return v.encode("utf-16-be", "surrogatepass")
+
+
 def canonical(v):
     """Match the recorder's canonical JSON (sorted keys, no spaces, JS number format)."""
     if isinstance(v, bool) or v is None:
@@ -112,10 +143,10 @@ def canonical(v):
     if isinstance(v, (int, float)):
         return js_number(v)
     if isinstance(v, str):
-        return json.dumps(v, ensure_ascii=False)
+        return js_string(v)
     if isinstance(v, list):
         return "[" + ",".join(canonical(x) for x in v) + "]"
-    return "{" + ",".join(json.dumps(k, ensure_ascii=False) + ":" + canonical(v[k]) for k in sorted(v)) + "}"
+    return "{" + ",".join(js_string(k) + ":" + canonical(v[k]) for k in sorted(v, key=utf16_sort_key)) + "}"
 
 
 def sha(b):
