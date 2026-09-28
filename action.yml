@@ -1,0 +1,30 @@
+name: proof-carrying-pr
+description: One gate for a PR's why, how and what. Checks the intent file (why), the sealed agent session proof (how), and that the diff matches both (what).
+branding: {icon: check-circle, color: green}
+inputs:
+  run-checks:
+    description: Also run the `check:` commands listed in the intent's "Done when" section.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Save PR body
+      shell: bash
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr_body.md"
+    - name: Why (intent-check)
+      shell: bash
+      run: |
+        python3 "${{ github.action_path }}/scripts/intent_check.py" \
+          --base "${{ github.event.pull_request.base.sha }}" \
+          --head "${{ github.event.pull_request.head.sha }}" \
+          --pr-body-file "$RUNNER_TEMP/pr_body.md" \
+          ${{ inputs.run-checks == 'true' && '--run-checks' || '' }}
+    - name: How + what (proof-check)
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: |
+        python3 "${{ github.action_path }}/scripts/proof_check.py" \
+          --base "${{ github.event.pull_request.base.sha }}" \
+          --head "${{ github.event.pull_request.head.sha }}"
