@@ -93,6 +93,27 @@ python3 scripts/test_intent_check.py   # fixtures for every rule
 
 > **Security note:** `check:` commands come from the PR itself. The workflow runs on `pull_request` with a read-only `contents` token and no secrets, so fork PRs can't reach anything privileged. Don't switch it to `pull_request_target`.
 
+## Proof-carrying PRs
+
+An intent says why. A proof bundle shows how the agent got there, and CI checks both against the diff.
+
+```sh
+agent-session-recorder bundle <sessionId> --intent 20260928-rate-limit-login --timestamp
+git add .proof/ && git commit -m "proof for 20260928-rate-limit-login"
+```
+
+`bundle` (from [agent-session-recorder](https://github.com/SM260845/agent-session-recorder)) writes a `proof.link` event naming the intent and the current commit into the sealed session, Merkle-batches it with an RFC 3161 timestamp, and saves `.proof/<intent-id>.json`.
+
+[`scripts/proof_check.py`](scripts/proof_check.py) re-implements the verifier independently, with no dependencies, and fails the PR if:
+
+- any session event was edited, dropped, inserted or reordered
+- any event isn't covered by a Merkle batch, or a timestamp doesn't cover its batch
+- the sealed link names a different intent or commit (a proof borrowed from another intent)
+- the intent file doesn't exist, or the linked commit isn't in the PR
+- code changed after the linked commit (only `.proof/` and `.intent/` may follow it)
+
+PRs without a bundle pass with a notice and are treated as human-authored. The bundle proves the session record wasn't altered. It doesn't prove the agent reported truthfully, or that the code is correct.
+
 ## Demo walkthrough
 
 The demo feature is a login rate limiter ([#1](https://github.com/SM260845/intent-first/issues/1)). Five proof PRs exercise the gate:
