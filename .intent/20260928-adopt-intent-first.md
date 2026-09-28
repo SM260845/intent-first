@@ -1,5 +1,5 @@
 ---
-id: 0001
+id: 20260928-adopt-intent-first
 status: shipped
 touches: [README.md, .intent/]
 ---
