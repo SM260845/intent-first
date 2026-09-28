@@ -1,0 +1,5 @@
+# Intents are the source of truth. A human must review every change to them.
+/.intent/        @SM260845
+# The gate that enforces the rules.
+/.github/        @SM260845
+/scripts/        @SM260845

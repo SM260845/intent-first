@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""intent-check: the one gate an intent-first repo needs.
+
+Usage:
+  python3 scripts/intent_check.py --base <sha> --head <sha> [--pr-body-file FILE] [--run-checks]
+
+Exit 0 = pass, 1 = fail. Warnings are printed as GitHub annotations.
+No dependencies beyond Python 3 and git.
+"""
+import argparse
+import datetime
+import os
+import re
+import subprocess
+import sys
+
+INTENT_DIR = ".intent/"
+FILENAME_RE = re.compile(r"^(\d{8})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
+STATUSES = {"draft", "shipped"}
+REQUIRED_KEYS = ("id", "status", "touches")
+REQUIRED_SECTIONS = ("Want", "Not", "Done when")
+TRAILER_RE = re.compile(r"^\s*Intent:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
+
+errors, warnings, notes = [], [], []
+GH = os.environ.get("GITHUB_ACTIONS") == "true"
+sys.stdout.reconfigure(line_buffering=True)
+
+
+def err(msg, path=None):
+    errors.append(msg)
+    print(f"::error{' file=' + path if (GH and path) else ''}::{msg}" if GH else f"ERROR: {msg}")
+
+
+def warn(msg, path=None):
+    warnings.append(msg)
+    print(f"::warning{' file=' + path if (GH and path) else ''}::{msg}" if GH else f"WARN:  {msg}")
+
+
+def note(msg):
+    notes.append(msg)
+    print(f"::notice::{msg}" if GH else f"NOTE:  {msg}")
+
+
+def git(*args, check=True):
+    r = subprocess.run(["git", *args], capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+    return r.stdout
+
+
+def show(rev, path):
+    r = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def parse(text):
+    """Return (frontmatter dict, body str, section dict) or raise ValueError."""
+    if not text.startswith("---\n"):
+        raise ValueError("missing frontmatter (file must start with '---')")
+    end = text.find("\n---", 4)
+    if end == -1:
+        raise ValueError("unterminated frontmatter")
+    fm_raw, body = text[4:end], text[end + 4:].lstrip("\n")
+    fm = {}
+    for line in fm_raw.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            raise ValueError(f"bad frontmatter line: {line!r}")
+        k, v = line.split(":", 1)
+        v = v.strip()
+        if v.startswith("[") and v.endswith("]"):
+            v = [x.strip().strip("'\"") for x in v[1:-1].split(",") if x.strip()]
+        fm[k.strip()] = v
+    sections, cur = {}, None
+    for line in body.splitlines():
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            cur = m.group(1)
+            sections[cur] = []
+        elif cur:
+            sections[cur].append(line)
+    return fm, body, sections
+
+
+def done_when_checks(sections):
+    """Bullets under 'Done when' and optional indented 'check: `cmd`' lines."""
+    bullets = []
+    for line in sections.get("Done when", []):
+        if re.match(r"^[-*]\s+\S", line):
+            bullets.append({"text": line[1:].strip(), "check": None})
+        else:
+            m = re.match(r"^\s+check:\s*`(.+)`\s*$", line)
+            if m and bullets:
+                bullets[-1]["check"] = m.group(1)
+    return bullets
+
+
+def validate(path, text):
+    """Schema check. Returns frontmatter or None."""
+    name = path[len(INTENT_DIR):]
+    m = FILENAME_RE.match(name)
+    if not m:
+        err(f"{path}: filename must be YYYYMMDD-slug.md (e.g. 20260928-rate-limit-login.md)", path)
+        return None
+    try:
+        datetime.datetime.strptime(m.group(1), "%Y%m%d")
+    except ValueError:
+        err(f"{path}: '{m.group(1)}' is not a real date", path)
+    try:
+        fm, body, sections = parse(text)
+    except ValueError as e:
+        err(f"{path}: {e}", path)
+        return None
+    for k in REQUIRED_KEYS:
+        if not fm.get(k):
+            err(f"{path}: frontmatter missing '{k}'", path)
+    stem = name[:-3]
+    if fm.get("id") and fm["id"] != stem:
+        err(f"{path}: id '{fm['id']}' must equal filename '{stem}'", path)
+    if fm.get("status") and fm["status"] not in STATUSES:
+        err(f"{path}: status must be one of {sorted(STATUSES)}, got '{fm['status']}'", path)
+    if "touches" in fm and not isinstance(fm["touches"], list):
+        err(f"{path}: touches must be a list, e.g. [src/auth/, tests/auth/]", path)
+    if not re.search(r"^#\s+\S", body, re.M):
+        err(f"{path}: missing '# Title'", path)
+    for s in REQUIRED_SECTIONS:
+        content = [l for l in sections.get(s, []) if l.strip()]
+        if s not in sections:
+            err(f"{path}: missing section '## {s}'", path)
+        elif not content:
+            err(f"{path}: section '## {s}' is empty", path)
+    if "Done when" in sections and not done_when_checks(sections):
+        err(f"{path}: '## Done when' needs at least one '- ' bullet", path)
+    fm["_sections"] = sections
+    return fm
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", required=True)
+    ap.add_argument("--head", required=True)
+    ap.add_argument("--pr-body-file")
+    ap.add_argument("--run-checks", action="store_true")
+    a = ap.parse_args()
+
+    base = git("merge-base", a.base, a.head).strip()
+    diff = git("diff", "--name-status", "--no-renames", base, a.head).splitlines()
+    changes = [(l.split("\t", 1)[0][0], l.split("\t", 1)[1]) for l in diff if l.strip()]
+    intent_changes = [(s, p) for s, p in changes if p.startswith(INTENT_DIR)]
+    code_paths = [p for s, p in changes if not p.startswith(INTENT_DIR)]
+
+    print(f"base {base[:12]}  head {a.head[:12]}  files changed: {len(changes)}")
+
+    # --- 1. schema of every intent file this PR adds or modifies
+    added, modified = {}, {}
+    for status, path in intent_changes:
+        if status == "D":
+            err(f"{path}: deleting intents is not allowed. Intents are a log; supersede instead.", path)
+            continue
+        text = show(a.head, path) or ""
+        fm = validate(path, text)
+        stem = path[len(INTENT_DIR):]
+        stem = stem[:-3] if stem.endswith(".md") else stem
+        (added if status == "A" else modified)[stem] = (path, fm)
+
+    # --- 3. immutability: shipped intents cannot change at all
+    for stem, (path, fm) in modified.items():
+        old = show(base, path)
+        old_fm = parse_safe(old)
+        if old_fm and old_fm.get("status") == "shipped":
+            err(f"{path}: intent is shipped and immutable. Write a new intent with 'supersedes: {stem}'.", path)
+        elif old_fm and fm and old_fm.get("status") == "draft":
+            if fm.get("status") == "shipped":
+                note(f"{stem}: status flip draft -> shipped")
+
+    # --- gate: collect referenced intent ids
+    refs = set()
+    if a.pr_body_file and os.path.exists(a.pr_body_file):
+        refs |= set(TRAILER_RE.findall(open(a.pr_body_file, encoding="utf-8").read()))
+    log = git("log", "--format=%B%x00", f"{base}..{a.head}")
+    refs |= set(TRAILER_RE.findall(log))
+
+    for r in sorted(refs - set(added)):
+        path = f"{INTENT_DIR}{r}.md"
+        base_fm = parse_safe(show(base, path))
+        head_text = show(a.head, path)
+        if base_fm is None and head_text is None:
+            err(f"Intent: {r} does not exist in .intent/")
+        elif base_fm is not None and base_fm.get("status") == "shipped":
+            err(f"Intent: {r} is already shipped. Reference a draft intent, or add a new one (use 'supersedes:' to replace it).")
+
+    ids = set(added) | set(modified) | refs
+    # --- 1. the gate: exactly ONE intent
+    if len(ids) == 0:
+        err("No intent. Add one .intent/YYYYMMDD-slug.md, or reference an existing draft with an 'Intent: <id>' line in the PR body or a commit trailer.")
+    elif len(ids) > 1:
+        err(f"One PR, one intent. This PR references {len(ids)}: {', '.join(sorted(ids))}")
+    intent_id = next(iter(ids)) if len(ids) == 1 else None
+
+    # --- 5. supersedes
+    for stem, (path, fm) in added.items():
+        if not fm or not fm.get("supersedes"):
+            continue
+        old = fm["supersedes"]
+        old_path = f"{INTENT_DIR}{old}.md"
+        old_fm = parse_safe(show(base, old_path))
+        if old_fm is None:
+            err(f"{path}: supersedes '{old}' but {old_path} does not exist on the base branch", path)
+        else:
+            if old_fm.get("status") != "shipped":
+                warn(f"{path}: supersedes '{old}', which is still '{old_fm.get('status')}'. Consider editing the draft instead.", path)
+            if any(p == old_path for _, p in intent_changes):
+                err(f"{old_path}: a superseded intent must stay untouched. The new intent records the replacement.", old_path)
+            else:
+                note(f"{stem} supersedes {old} (old file untouched)")
+
+    # resolve the intent's frontmatter for touches/checks
+    fm = None
+    if intent_id:
+        if intent_id in added:
+            fm = added[intent_id][1]
+        elif intent_id in modified:
+            fm = modified[intent_id][1]
+        else:
+            t = show(a.head, f"{INTENT_DIR}{intent_id}.md")
+            fm = validate(f"{INTENT_DIR}{intent_id}.md", t) if t else None
+
+    # --- 8. touches: warn on paths outside scope
+    if fm and isinstance(fm.get("touches"), list):
+        scope = fm["touches"]
+        outside = [p for p in code_paths if not any(p == t or p.startswith(t.rstrip("/") + "/") for t in scope)]
+        for p in outside:
+            warn(f"{p} is outside touches {scope} of intent {intent_id}", p)
+
+    # --- 7. Done-when checks
+    if fm and fm.get("_sections"):
+        bullets = done_when_checks(fm["_sections"])
+        for b in bullets:
+            if not b["check"]:
+                note(f"Done when (human review): {b['text']}")
+            elif a.run_checks and not errors:
+                print(f"--- check: {b['check']}", flush=True)
+                r = subprocess.run(b["check"], shell=True)
+                if r.returncode != 0:
+                    err(f"Done-when check failed ({r.returncode}): {b['check']}")
+                else:
+                    print(f"    ok: {b['text']}")
+            else:
+                note(f"Done when (check, not run): {b['check']}")
+
+    print()
+    if intent_id:
+        print(f"Intent: {intent_id}")
+    print(f"{len(errors)} error(s), {len(warnings)} warning(s)")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(f"## intent-check: {'FAIL' if errors else 'PASS'}\n\n")
+            f.write(f"**Intent:** `{intent_id or 'none'}`\n\n")
+            for label, items in (("Error", errors), ("Warning", warnings), ("Note", notes)):
+                for i in items:
+                    f.write(f"- **{label}:** {i}\n")
+    return 1 if errors else 0
+
+
+def parse_safe(text):
+    if text is None:
+        return None
+    try:
+        return parse(text)[0]
+    except ValueError:
+        return {}
+
+
+if __name__ == "__main__":
+    sys.exit(main())
