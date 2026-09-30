@@ -1,34 +1,84 @@
-name: proof-carrying-pr
-description: One gate for a PR's why, how and what. Checks the intent file (why), the sealed agent session proof (how), and that the diff matches both (what).
-branding: {icon: check-circle, color: green}
+name: Intent-First Gate
+description: One intent per PR. Checks the .intent/ file (Want / Not / Done when), runs its checks, and verifies any sealed agent session proof.
+author: SM260845
+branding:
+  icon: check-circle
+  color: green
 inputs:
+  base-ref:
+    description: Base commit or ref to diff against. Defaults to the pull request's base SHA.
+    default: ""
+  head-ref:
+    description: Head commit or ref to check. Defaults to the pull request's head SHA.
+    default: ""
+  strict-touches:
+    description: Fail (instead of warn) when a changed path is outside the intent's `touches:` list.
+    default: "false"
   run-checks:
     description: Also run the `check:` commands listed in the intent's "Done when" section.
+    default: "true"
+  proof-check:
+    description: Also verify sealed agent session proofs (.proof/<intent>.json) when a PR carries one.
     default: "true"
   require-proof:
     description: Fail PRs that carry no sealed session proof (.proof/<intent>.json).
     default: "false"
+outputs:
+  intent:
+    description: The intent id this PR is about (empty if none was found).
+    value: ${{ steps.why.outputs.intent }}
 runs:
   using: composite
   steps:
-    - name: Save PR body
+    - name: Prepare (refs, history, PR body)
+      id: refs
       shell: bash
       env:
+        IN_BASE: ${{ inputs.base-ref }}
+        IN_HEAD: ${{ inputs.head-ref }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD: ${{ github.event.pull_request.head.sha }}
         PR_BODY: ${{ github.event.pull_request.body }}
-      run: printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr_body.md"
+      run: |
+        base="${IN_BASE:-$PR_BASE}"; head="${IN_HEAD:-$PR_HEAD}"
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+          echo "::error title=intent-check::No git checkout. Add 'uses: actions/checkout@v5' with 'fetch-depth: 0' before this action."
+          exit 1
+        fi
+        if [ -z "$base" ] || [ -z "$head" ]; then
+          echo "::error title=intent-check::No base/head commit. Run on 'pull_request', or set the base-ref and head-ref inputs."
+          exit 1
+        fi
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::notice title=intent-check::Shallow clone; fetching full history (set fetch-depth: 0 on actions/checkout to skip this)."
+          git fetch --quiet --no-tags --unshallow origin || true
+        fi
+        for r in "$base" "$head"; do
+          git rev-parse --verify --quiet "$r^{commit}" >/dev/null || git fetch --quiet --no-tags origin "$r" || true
+        done
+        printf '%s' "$PR_BODY" > "$RUNNER_TEMP/intent_pr_body.md"
+        { echo "base=$base"; echo "head=$head"; } >> "$GITHUB_OUTPUT"
     - name: Why (intent-check)
+      id: why
       shell: bash
+      env:
+        BASE: ${{ steps.refs.outputs.base }}
+        HEAD: ${{ steps.refs.outputs.head }}
+        RUN_CHECKS: ${{ inputs.run-checks }}
+        STRICT_TOUCHES: ${{ inputs.strict-touches }}
       run: |
-        python3 "${{ github.action_path }}/scripts/intent_check.py" \
-          --base "${{ github.event.pull_request.base.sha }}" \
-          --head "${{ github.event.pull_request.head.sha }}" \
-          --pr-body-file "$RUNNER_TEMP/pr_body.md" \
-          ${{ inputs.run-checks == 'true' && '--run-checks' || '' }}
+        args=(--base "$BASE" --head "$HEAD" --pr-body-file "$RUNNER_TEMP/intent_pr_body.md")
+        [ "$RUN_CHECKS" = "true" ] && args+=(--run-checks)
+        [ "$STRICT_TOUCHES" = "true" ] && args+=(--touches=fail)
+        python3 "$GITHUB_ACTION_PATH/scripts/intent_check.py" "${args[@]}"
     - name: How + what (proof-check)
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && inputs.proof-check == 'true' && steps.refs.outcome == 'success' }}
       shell: bash
+      env:
+        BASE: ${{ steps.refs.outputs.base }}
+        HEAD: ${{ steps.refs.outputs.head }}
+        REQUIRE_PROOF: ${{ inputs.require-proof }}
       run: |
-        python3 "${{ github.action_path }}/scripts/proof_check.py" \
-          --base "${{ github.event.pull_request.base.sha }}" \
-          --head "${{ github.event.pull_request.head.sha }}" \
-          ${{ inputs.require-proof == 'true' && '--require-proof' || '' }}
+        args=(--base "$BASE" --head "$HEAD")
+        [ "$REQUIRE_PROOF" = "true" ] && args+=(--require-proof)
+        python3 "$GITHUB_ACTION_PATH/scripts/proof_check.py" "${args[@]}"

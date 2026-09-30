@@ -3,6 +3,7 @@
 
 Usage:
   python3 scripts/intent_check.py --base <sha> --head <sha> [--pr-body-file FILE] [--run-checks]
+                                  [--touches warn|fail] [--strict-touches]
 
 Exit 0 = pass, 1 = fail. Warnings are printed as GitHub annotations.
 No dependencies beyond Python 3 and git.
@@ -26,14 +27,24 @@ GH = os.environ.get("GITHUB_ACTIONS") == "true"
 sys.stdout.reconfigure(line_buffering=True)
 
 
+def annotate(kind, msg, path=None):
+    """GitHub workflow command, escaped so '%' and newlines survive."""
+    data = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    props = "title=intent-check"
+    if path:
+        esc = path.replace("%", "%25").replace(",", "%2C").replace(":", "%3A")
+        props = f"file={esc},line=1," + props
+    print(f"::{kind} {props}::{data}")
+
+
 def err(msg, path=None):
     errors.append(msg)
-    print(f"::error{' file=' + path if (GH and path) else ''}::{msg}" if GH else f"ERROR: {msg}")
+    annotate("error", msg, path) if GH else print(f"ERROR: {msg}")
 
 
 def warn(msg, path=None):
     warnings.append(msg)
-    print(f"::warning{' file=' + path if (GH and path) else ''}::{msg}" if GH else f"WARN:  {msg}")
+    annotate("warning", msg, path) if GH else print(f"WARN:  {msg}")
 
 
 def note(msg):
@@ -142,6 +153,10 @@ def main():
     ap.add_argument("--head", required=True)
     ap.add_argument("--pr-body-file")
     ap.add_argument("--run-checks", action="store_true")
+    ap.add_argument("--touches", choices=("warn", "fail"), default="warn",
+                    help="what to do with changed paths outside the intent's touches: list")
+    ap.add_argument("--strict-touches", dest="touches", action="store_const", const="fail",
+                    help="same as --touches=fail")
     a = ap.parse_args()
 
     base = git("merge-base", a.base, a.head).strip()
@@ -226,12 +241,12 @@ def main():
             t = show(a.head, f"{INTENT_DIR}{intent_id}.md")
             fm = validate(f"{INTENT_DIR}{intent_id}.md", t) if t else None
 
-    # --- 8. touches: warn on paths outside scope
+    # --- 8. touches: warn (or, with --touches=fail, fail) on paths outside scope
     if fm and isinstance(fm.get("touches"), list):
         scope = fm["touches"]
         outside = [p for p in code_paths if not any(p == t or p.startswith(t.rstrip("/") + "/") for t in scope)]
         for p in outside:
-            warn(f"{p} is outside touches {scope} of intent {intent_id}", p)
+            (err if a.touches == "fail" else warn)(f"{p} is outside touches {scope} of intent {intent_id}", p)
 
     # --- 7. Done-when checks
     if fm and fm.get("_sections"):
@@ -256,11 +271,25 @@ def main():
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
-            f.write(f"## intent-check: {'FAIL' if errors else 'PASS'}\n\n")
-            f.write(f"**Intent:** `{intent_id or 'none'}`\n\n")
+            f.write(f"## intent-check: {'❌ FAIL' if errors else '✅ PASS'}\n\n")
+            f.write(f"**Intent:** `{intent_id or 'none'}`")
+            if fm and fm.get("_sections"):
+                title = re.search(r"^#\s+(.+)$", show(a.head, f"{INTENT_DIR}{intent_id}.md") or "", re.M)
+                f.write(f" ({title.group(1).strip()})" if title else "")
+            f.write(f"  \n**Touches mode:** {a.touches}\n\n")
             for label, items in (("Error", errors), ("Warning", warnings), ("Note", notes)):
                 for i in items:
                     f.write(f"- **{label}:** {i}\n")
+            if errors:
+                f.write("\n**How to fix:** add exactly one `.intent/YYYYMMDD-slug.md` with frontmatter "
+                        "(`id`, `status`, `touches`) and non-empty `## Want`, `## Not`, `## Done when` sections, "
+                        "or reference an existing draft with an `Intent: <id>` line in the PR body or a commit trailer. "
+                        "Rules: https://github.com/SM260845/intent-first#rules\n")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a", encoding="utf-8") as f:
+            valid_id = intent_id and FILENAME_RE.match(f"{intent_id}.md")
+            f.write(f"intent={intent_id if valid_id else ''}\n")
     return 1 if errors else 0
 
 

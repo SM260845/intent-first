@@ -58,12 +58,12 @@ class Repo:
     def rev(self):
         return self.git("rev-parse", "HEAD").strip()
 
-    def check(self, body=""):
+    def check(self, body="", extra=()):
         bf = os.path.join(self.d, ".git", "body")
         open(bf, "w").write(body)
         env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY")}
         r = subprocess.run([sys.executable, CHECK, "--base", self.base, "--head", self.rev(),
-                            "--pr-body-file", bf, "--run-checks"], cwd=self.d, capture_output=True, text=True, env=env)
+                            "--pr-body-file", bf, "--run-checks", *extra], cwd=self.d, capture_output=True, text=True, env=env)
         return r.returncode, r.stdout + r.stderr
 
 
@@ -209,11 +209,36 @@ def _(r):
     r.commit("x")
 
 
+@case("path outside touches fails with --touches=fail", 1)
+def _(r):
+    r.write(".intent/20260928-feature.md", intent("20260928-feature", touches="[src/]"))
+    r.write("docs/elsewhere.md", "x\n")
+    r.commit("x")
+    return "", ["--touches=fail"]
+
+
+@case("path outside touches fails with --strict-touches", 1)
+def _(r):
+    r.write(".intent/20260928-feature.md", intent("20260928-feature", touches="[src/]"))
+    r.write("docs/elsewhere.md", "x\n")
+    r.commit("x")
+    return "", ["--strict-touches"]
+
+
+@case("paths inside touches pass with --strict-touches", 0)
+def _(r):
+    r.write(".intent/20260928-feature.md", intent("20260928-feature", touches="[src/]"))
+    r.write("src/a.py", "x\n")
+    r.commit("x")
+    return "", ["--strict-touches"]
+
+
 fails = 0
 for name, expect, fn in cases:
     r = Repo()
-    body = fn(r) or ""
-    code, out = r.check(body)
+    res = fn(r) or ""
+    body, extra = res if isinstance(res, tuple) else (res, [])
+    code, out = r.check(body, extra)
     ok = code == expect
     fails += not ok
     print(f"{'ok  ' if ok else 'FAIL'} expect={'pass' if expect == 0 else 'fail'} got={'pass' if code == 0 else 'fail'}  {name}")
