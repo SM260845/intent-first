@@ -2,9 +2,59 @@
 
 > Commit the why. Code is regenerable.
 
-[![intent-check](https://github.com/SM260845/intent-first/actions/workflows/intent-check.yml/badge.svg)](https://github.com/SM260845/intent-first/actions/workflows/intent-check.yml)
+[![intent-check](https://github.com/SM260845/intent-first/actions/workflows/proof-carrying-pr.yml/badge.svg)](https://github.com/SM260845/intent-first/actions/workflows/proof-carrying-pr.yml)
 
 Original essay: [gist](https://gist.github.com/SM260845/5db513ca90679e0d5845b601ae9e6a5c). This README holds the current rules, revised after dogfooding.
+
+## Install in 30 seconds
+
+**1. Add the gate** as `.github/workflows/intent-check.yml`, then make `intent-check` a required status check:
+
+```yaml
+name: intent-check
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+jobs:
+  intent-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
+      - uses: SM260845/intent-first@v1
+        # with: {strict-touches: "true"}   # fail, not warn, on paths outside touches:
+```
+
+**2. Write your first intent** as `.intent/20261001-first-intent.md` in the same PR:
+
+```markdown
+---
+id: 20261001-first-intent
+status: draft
+touches: [.github/, .intent/]
+---
+# Adopt intent-first
+
+## Want
+Every PR states its intent.
+
+## Not
+No other changes.
+
+## Done when
+- The intent-check job passes on this PR
+```
+
+**3. Install `git why`** to go from any line to its intent:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SM260845/intent-first/v1/bin/git-why -o ~/.local/bin/git-why && chmod +x ~/.local/bin/git-why
+git why src/ratelimit.py:21   # commit, intent id, status, PR, supersede chain, Want / Not / Done when
+```
+
+Inputs: `base-ref`, `head-ref` (default: the PR's), `strict-touches` (default `false`), `run-checks` (default `true`), `proof-check` (default `true`), `require-proof` (default `false`). Live example: [SM260845/intent-first-consumer-test](https://github.com/SM260845/intent-first-consumer-test) (PR #1 passes, PR #2 with a junk `hi` intent fails).
 
 ## Problem
 
@@ -58,7 +108,7 @@ Intent: 20260928-rate-limit-login
 
 ## Rules
 
-These are enforced by [`scripts/intent_check.py`](scripts/intent_check.py) in [`.github/workflows/intent-check.yml`](.github/workflows/intent-check.yml).
+These are enforced by [`scripts/intent_check.py`](scripts/intent_check.py) via [`action.yml`](action.yml).
 
 1. **One PR, one intent.** A PR must be about exactly one intent. It can either
    - add one new `.intent/*.md`, **or**
@@ -71,7 +121,7 @@ These are enforced by [`scripts/intent_check.py`](scripts/intent_check.py) in [`
 5. **Supersede, never edit.** To change a shipped decision, add a new intent with `supersedes: <old-id>`. The old id must exist, and the old file must not change in that PR.
 6. **Humans own intents.** [`CODEOWNERS`](.github/CODEOWNERS) requires review from @SM260845 on `.intent/`. Anyone (or any agent) can write code.
 7. **Done when is checkable where possible.** An indented ``check: `cmd` `` line under a bullet is run by CI, and a non-zero exit fails the PR. Bullets without `check:` go to human review and are listed in the job summary.
-8. **Stay in scope.** CI puts a warning annotation on every changed path outside the intent's `touches:`. It warns rather than fails; see [#3](https://github.com/SM260845/intent-first/issues/3) for a strict mode.
+8. **Stay in scope.** CI puts a warning annotation on every changed path outside the intent's `touches:`. It warns by default; `strict-touches: "true"` (`--touches=fail`) makes it fail.
 
 A junk intent (`.intent/hi.md` containing only `hi`) fails CI. That was the kill criterion for this design, and a self-test fixture checks it on every PR.
 
@@ -79,7 +129,7 @@ A junk intent (`.intent/hi.md` containing only `hi`) fails CI. That was the kill
 
 1. Create `.intent/` and write your first intent (`YYYYMMDD-slug.md`).
 2. Copy [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) (it asks for Intent ID, link, and Done when).
-3. Copy [`scripts/intent_check.py`](scripts/intent_check.py) and [`.github/workflows/intent-check.yml`](.github/workflows/intent-check.yml), then mark `intent-check` as a required status check.
+3. Add the workflow from [Install in 30 seconds](#install-in-30-seconds), then mark `intent-check` as a required status check.
 4. Add `/.intent/ @your-team` to `.github/CODEOWNERS` and turn on "Require review from Code Owners".
 
 No framework. It's a folder, one dependency-free Python script, and a rule.
@@ -145,7 +195,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: {fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}"}
-      - uses: SM260845/intent-first@main   # intent-check, then proof-check
+      - uses: SM260845/intent-first@v1   # intent-check, then proof-check
         with: {run-checks: "true", require-proof: "false"}  # "true" fails PRs with no sealed session
 ```
 

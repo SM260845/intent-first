@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""git why: show the intent behind a line of code.
+
+  git why <file>:<line>      (or: git why <file> <line>)
+  git why <commit>
+
+Blames the line, reads the commit's `Intent: <id>` trailer (falling back to
+the merge commit that brought it in, the PR's other commits, or an intent
+file the commit added), then prints the intent: id, status, PR, supersede
+chain, Want, Not and Done when. Put this file on PATH as `git-why` and git
+picks it up as `git why`. Needs only Python 3 and git.
+
+Options:
+  --rev REV   blame as of REV instead of the working tree
+  --json      machine-readable output
+  --no-gh     never ask GitHub (via `gh`) for a squash-merged PR's body
+Exit: 0 intent found, 1 no intent found (the commit is shown), 2 usage error.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+INTENT_DIR = ".intent/"
+TRAILER_RE = re.compile(r"^\s*Intent:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
+PR_RE = re.compile(r"\(#(\d+)\)\s*$|^Merge (?:pull request )?#(\d+)\b", re.M)
+
+
+class Fail(Exception):
+    pass
+
+
+def git(*args, check=True):
+    r = subprocess.run(["git", *args], capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise Fail(r.stderr.strip() or f"git {args[0]} failed")
+    return r.stdout if r.returncode == 0 else None
+
+
+def show(rev, path):
+    return git("show", f"{rev}:{path}", check=False)
+
+
+def message(rev):
+    return git("log", "-1", "--format=%B", rev)
+
+
+def parents(rev):
+    return git("rev-list", "--parents", "-n", "1", rev).split()[1:]
+
+
+def parse(text):
+    """Frontmatter dict, title and sections of an intent file (lenient)."""
+    fm, body = {}, text or ""
+    if body.startswith("---\n") and "\n---" in body[4:]:
+        end = body.find("\n---", 4)
+        for line in body[4:end].splitlines():
+            if ":" in line and not line.lstrip().startswith("#"):
+                k, v = line.split(":", 1)
+                fm[k.strip()] = v.split(" #")[0].strip()
+        body = body[end + 4:].lstrip("\n")
+    title = re.search(r"^#\s+(.+?)\s*$", body, re.M)
+    sections, cur = {}, None
+    for line in body.splitlines():
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            cur = m.group(1)
+            sections[cur] = []
+        elif cur is not None:
+            sections[cur].append(line)
+    sections = {k: "\n".join(v).strip("\n") for k, v in sections.items()}
+    return fm, (title.group(1) if title else ""), sections
+
+
+def trailer_ids(text):
+    seen = []
+    for i in TRAILER_RE.findall(text or ""):
+        if i not in seen:
+            seen.append(i)
+    return seen
+
+
+def added_intents(a, b=None):
+    """Intent ids whose files were added in commit a (or in the range a..b)."""
+    if b is None:
+        out = git("diff-tree", "--no-commit-id", "-r", "--root", "--name-only", "--diff-filter=A", a, "--", INTENT_DIR)
+    else:
+        out = git("diff", "--name-only", "--diff-filter=A", a, b, "--", INTENT_DIR)
+    return [p[len(INTENT_DIR):-3] for p in (out or "").split() if p.endswith(".md")]
+
+
+def merge_of(sha):
+    """The first-parent merge on HEAD that brought sha in, or None (sha is on the mainline)."""
+    desc = set((git("rev-list", "--ancestry-path", f"{sha}..HEAD", check=False) or "").split())
+    m = None
+    for c in (git("rev-list", "--first-parent", "HEAD", check=False) or "").split():
+        if c not in desc:
+            break
+        m = c
+    if m and len(parents(m)) > 1 and git("merge-base", "--is-ancestor", sha, parents(m)[0], check=False) is None:
+        return m
+    return None
+
+
+def pr_number(*msgs):
+    for msg in msgs:
+        m = PR_RE.search((msg or "").splitlines()[0] if msg else "")
+        if m:
+            return int(m.group(1) or m.group(2))
+    return None
+
+
+def gh_intent(sha, pr):
+    """Last resort for squash merges whose trailer lives only in the PR body."""
+    if os.environ.get("GIT_WHY_NO_GH") or not shutil.which("gh"):
+        return None, pr
+    try:
+        if pr:
+            cmd = ["gh", "pr", "view", str(pr), "--json", "number,body"]
+        else:
+            cmd = ["gh", "pr", "list", "--state", "merged", "--search", sha, "--json", "number,body", "--jq", ".[0]"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        data = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None, pr
+    if not data:
+        return None, pr
+    ids = trailer_ids(data.get("body"))
+    return (ids[0] if len(ids) == 1 else None), (pr or data.get("number"))
+
+
+def resolve(sha, use_gh=True):
+    """Return (intent id or None, how it was found, PR number or None, merge sha or None)."""
+    msg = message(sha)
+    m = merge_of(sha)
+    mmsg = message(m) if m else ""
+    pr = pr_number(msg, mmsg)
+    ids = trailer_ids(msg)
+    if ids:
+        return ids[0], "commit trailer", pr, m
+    ids = added_intents(sha)
+    if len(ids) == 1:
+        return ids[0], "intent file added by this commit", pr, m
+    if m:
+        ids = trailer_ids(mmsg)
+        if ids:
+            return ids[0], f"trailer on merge {m[:7]}", pr, m
+        first, others = parents(m)[0], parents(m)[1:]
+        pr_log = "".join(git("log", "--format=%B", f"{first}..{o}") for o in others)
+        ids = trailer_ids(pr_log)
+        if len(ids) == 1:
+            return ids[0], f"trailer on another commit merged by {m[:7]}", pr, m
+        ids = added_intents(first, m)
+        if len(ids) == 1:
+            return ids[0], f"intent file added by merge {m[:7]}", pr, m
+    if use_gh:
+        i, pr = gh_intent(sha, pr)
+        if i:
+            return i, f"Intent: line in PR #{pr} body (GitHub)", pr, m
+    return None, None, pr, m
+
+
+def renamed(path):
+    """Follow renames of an intent file up to HEAD (e.g. a migrated id)."""
+    moves = {}
+    for line in (git("log", "--reverse", "--format=", "-M", "--name-status", "--diff-filter=R", "HEAD", "--", INTENT_DIR,
+                     check=False) or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3:
+            moves[parts[1]] = parts[2]
+    seen = {path}
+    while path in moves and moves[path] not in seen:
+        path = moves[path]
+        seen.add(path)
+    return path
+
+
+def find_intent(iid, revs):
+    """(path, rev, text, renamed_from) of the intent, preferring HEAD. Falls back to matching frontmatter ids."""
+    path = f"{INTENT_DIR}{iid}.md"
+    for rev in revs:
+        t = show(rev, path)
+        if t is not None:
+            return path, rev, t, None
+    for rev in revs:
+        for p in (git("ls-tree", "--name-only", f"{rev}:{INTENT_DIR}", check=False) or "").split():
+            t = show(rev, INTENT_DIR + p)
+            if t and parse(t)[0].get("id") == iid:
+                now = renamed(INTENT_DIR + p)
+                head_t = show("HEAD", now) if now != INTENT_DIR + p else None
+                if head_t is not None:
+                    return now, "HEAD", head_t, INTENT_DIR + p
+                return INTENT_DIR + p, rev, t, None
+    return None, None, None, None
+
+
+def all_intents():
+    out = {}
+    for p in (git("ls-tree", "--name-only", f"HEAD:{INTENT_DIR}", check=False) or "").split():
+        if p.endswith(".md"):
+            fm, title, _ = parse(show("HEAD", INTENT_DIR + p))
+            out[fm.get("id") or p[:-3]] = (fm, title)
+    return out
+
+
+def chains(iid):
+    """(ids this intent supersedes, oldest first; ids that supersede it, newest last)."""
+    idx = all_intents()
+    back, cur = [], iid
+    while cur in idx and idx[cur][0].get("supersedes") and len(back) < 50:
+        cur = idx[cur][0]["supersedes"]
+        back.insert(0, cur)
+    fwd, cur = [], iid
+    while len(fwd) < 50:
+        nxt = sorted(k for k, (fm, _) in idx.items() if fm.get("supersedes") == cur)
+        if not nxt:
+            break
+        cur = nxt[-1]
+        fwd.append(cur)
+    return back, fwd, idx
+
+
+def parse_target(argv):
+    if len(argv) == 2 and argv[1].isdigit():
+        return argv[0], int(argv[1])
+    if len(argv) == 1:
+        m = re.match(r"^(.+):(\d+)$", argv[0])
+        if m:
+            return m.group(1), int(m.group(2))
+        return argv[0], None
+    raise Fail("usage: git why <file>:<line> | <file> <line> | <commit>")
+
+
+def blame(path, line, rev):
+    args = ["blame", "--porcelain", "-L", f"{line},{line}"] + ([rev] if rev else []) + ["--", path]
+    r = subprocess.run(["git", *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Fail(r.stderr.strip().replace("fatal: ", "") or "git blame failed")
+    first = r.stdout.splitlines()[0].split()
+    return first[0]
+
+
+def main(argv):
+    opts = {"--json": False, "--no-gh": False}
+    rev, rest, i = None, [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        if a in opts:
+            opts[a] = True
+        elif a == "--rev" and i + 1 < len(argv):
+            rev, i = argv[i + 1], i + 1
+        else:
+            rest.append(a)
+        i += 1
+    if git("rev-parse", "--git-dir", check=False) is None:
+        raise Fail("not a git repository")
+    target, line = parse_target(rest)
+    where = f"{target}:{line}" if line else target
+    if line is None:
+        if os.path.isfile(target):
+            raise Fail(f"which line? try: git why {target}:<line>")
+        sha = git("rev-parse", "--verify", "--quiet", f"{target}^{{commit}}", check=False)
+        if not sha:
+            raise Fail(f"'{target}' is neither <file>:<line> nor a commit")
+        sha = sha.strip()
+    else:
+        sha = blame(target, line, rev)
+    if set(sha) == {"0"}:
+        print(f"{where}: not committed yet, so there is no intent to show.")
+        return 1
+    head = git("log", "-1", "--format=%h%x00%ad%x00%an%x00%s", "--date=short", sha).rstrip("\n").split("\0")
+    iid, how, pr, merge = resolve(sha, use_gh=not opts["--no-gh"])
+    res = {"target": where, "commit": sha, "subject": head[3], "author": head[2], "date": head[1],
+           "intent": iid, "found_via": how, "pr": pr, "merge": merge}
+    if iid:
+        path, frm, text, moved_from = find_intent(iid, ["HEAD"] + [r for r in (merge, sha) if r])
+        fm, title, sec = parse(text)
+        if moved_from:
+            back, fwd, idx = chains(fm.get("id") or iid)
+        else:
+            back, fwd, idx = chains(iid)
+        res.update(file=path, file_rev=None if frm in (None, "HEAD") else frm, renamed_from=moved_from,
+                   current_id=fm.get("id"), status=fm.get("status"), title=title,
+                   want=sec.get("Want"), not_=sec.get("Not"), done_when=sec.get("Done when"),
+                   supersedes=back, superseded_by=fwd)
+    if opts["--json"]:
+        res["not"] = res.pop("not_", None)
+        print(json.dumps(res, indent=2))
+        return 0 if iid else 1
+
+    print(f"{where + '  ' if line else ''}{head[0]}  {head[1]}  {head[2]}")
+    print(f"  {head[3]}")
+    print()
+    if not iid:
+        print(f"No Intent: trailer found for {head[0]} (checked the commit, "
+              f"{'its merge ' + merge[:7] + ', the PR commits, ' if merge else ''}and intent files it added).")
+        if pr:
+            print(f"PR         #{pr}")
+        print()
+        print(git("show", "--stat", "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B", sha).rstrip())
+        return 1
+    shown = iid if res["current_id"] in (None, iid) else f"{iid} (now {res['current_id']})"
+    rows = [("Intent", f"{shown}  ({res['status'] or 'unknown status'})"), ("Title", res["title"]), ("Found via", how)]
+    if pr:
+        rows.append(("PR", f"#{pr}"))
+    if res["file"]:
+        extra = f"  (as of {frm[:7]}; not on HEAD)" if res["file_rev"] else ""
+        extra += f"  (renamed from {moved_from})" if moved_from else ""
+        rows.append(("File", res["file"] + extra))
+    else:
+        rows.append(("File", f"{INTENT_DIR}{iid}.md not found in this repo"))
+    if back:
+        rows.append(("Supersedes", " <- ".join(reversed(back))))
+    if fwd:
+        rows.append(("Superseded", "by " + " -> ".join(f"{k} ({idx[k][0].get('status', '?')})" for k in fwd)))
+        rows.append(("Now", f"{fwd[-1]}: {idx[fwd[-1]][1]}"))
+    for k, v in rows:
+        if v:
+            print(f"{k:<11}{v}")
+    for label, key in (("Want", "want"), ("Not", "not_"), ("Done when", "done_when")):
+        if res.get(key):
+            print(f"\n{label}")
+            print("\n".join("  " + l if l.strip() else "" for l in res[key].splitlines()))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Fail as e:
+        print(f"git why: {e}", file=sys.stderr)
+        sys.exit(2)
+    except KeyboardInterrupt:
+        sys.exit(130)
