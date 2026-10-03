@@ -1,0 +1,48 @@
+name: consumer-demo
+
+# Runs the action from this checkout against the examples/consumer fixtures:
+# a valid intent must pass and a junk intent must fail. Runs on push (not
+# pull_request) so this repo's own PR body doesn't leak into the fixtures.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  consumer-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: gate
+      - name: Build a scratch consumer repo from examples/consumer
+        run: |
+          fx=gate/examples/consumer
+          git init -q -b main . && echo "gate/" >> .git/info/exclude
+          git config user.name demo && git config user.email demo@example.com
+          cp "$fx/README.md" . && git add README.md && git commit -qm "base"
+          git checkout -qb valid-intent
+          mkdir -p .intent src && cp "$fx/.intent/20261001-hello.md" .intent/ && cp "$fx/src/hello.py" src/
+          git add .intent src && git commit -qm "Add hello"
+          git checkout -qb junk-intent main
+          mkdir -p .intent && cp "$fx/.intent/hi.md" .intent/
+          git add .intent && git commit -qm "hi"
+          git checkout -q valid-intent
+      - name: valid intent (expected to pass)
+        id: valid
+        continue-on-error: true
+        uses: ./gate
+        with: {base-ref: main, head-ref: valid-intent}
+      - run: git checkout -q junk-intent
+      - name: junk intent (expected to fail)
+        id: junk
+        continue-on-error: true
+        uses: ./gate
+        with: {base-ref: main, head-ref: junk-intent}
+      - name: Assert outcomes
+        run: |
+          echo "valid=${{ steps.valid.outcome }} junk=${{ steps.junk.outcome }}"
+          test "${{ steps.valid.outcome }}" = success
+          test "${{ steps.junk.outcome }}" = failure

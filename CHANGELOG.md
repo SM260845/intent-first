@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Merged `ao3575911/intent-first-consumer-test` into `examples/consumer/` with its history. The new `consumer-demo` workflow runs the action against it and asserts that the valid intent passes and the junk intent fails.
+
 ## v1.0.1
 
 - Moved to `ao3575911/intent-first`. Links to the old owner still redirect, but update your `uses:` lines.

@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/ao3575911/intent-first/v1/bin/git-w
 git why src/ratelimit.py:21   # commit, intent id, status, PR, supersede chain, Want / Not / Done when
 ```
 
-Inputs: `base-ref`, `head-ref` (default: the PR's), `strict-touches` (default `false`), `run-checks` (default `true`), `run-checks-on-forks` (default `false`), `proof-check` (default `true`), `require-proof` (default `false`). Live example: [ao3575911/intent-first-consumer-test](https://github.com/ao3575911/intent-first-consumer-test) (PR #1 passes, PR #2 with a junk `hi` intent fails).
+Inputs: `base-ref`, `head-ref` (default: the PR's), `strict-touches` (default `false`), `run-checks` (default `true`), `run-checks-on-forks` (default `false`), `proof-check` (default `true`), `require-proof` (default `false`). Consumer example: [`examples/consumer/`](examples/consumer/) (formerly the `intent-first-consumer-test` repo). The [consumer-demo](.github/workflows/consumer-demo.yml) workflow runs the action against it on every push: the valid intent passes, the junk `hi` intent fails, and the job asserts both.
 
 > **Heads-up:** `run-checks` runs the `check:` commands written in the PR's intent, so it executes code from the PR author. It's skipped for PRs from forks unless you set `run-checks-on-forks: "true"`. Keep the workflow on `pull_request` (never `pull_request_target`) with a read-only token.
 
@@ -165,6 +165,17 @@ git add .proof/ && git commit -m "proof for 20260928-rate-limit-login"
 - code changed after the linked commit (only `.proof/` and `.intent/` may follow it)
 
 PRs without a bundle pass with a notice and are treated as human-authored. The bundle proves the session record wasn't altered. It doesn't prove the agent reported truthfully, or that the code is correct.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `action.yml` | The composite action (intent-check, then proof-check) |
+| `scripts/` | `intent_check.py`, `proof_check.py` and their self-tests |
+| `bin/git-why` | `git why <file>:<line>` |
+| `.intent/` | This repo's own intents |
+| `examples/consumer/` | Example consumer repo, used by the `consumer-demo` workflow. Formerly `ao3575911/intent-first-consumer-test`, merged here with its history |
+| `src/`, `tests/` | The demo rate limiter used by the walkthrough PRs |
 
 ## Demo walkthrough
 
