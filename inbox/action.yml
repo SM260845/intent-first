@@ -9,8 +9,11 @@ inputs:
     description: "`open` (on push to the default branch) or `ship` (on workflow_run, completed)."
     required: true
   token:
-    description: Token for the GitHub API and the move commit. Needs push access to the default branch if it is protected.
+    description: Token for the GitHub API and the move commit on the claim branch.
     default: ${{ github.token }}
+  fork-token:
+    description: Optional token that may push to the default branch. Used only to move the intent after merging a fork claim, whose branch can't take the move commit.
+    default: ""
   assignees:
     description: Optional comma-separated logins to assign each new intent issue to, e.g. copilot-swe-agent[bot]. Needs a user token.
     default: ""
@@ -21,6 +24,7 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         INBOX_ASSIGNEES: ${{ inputs.assignees }}
+        FORK_TOKEN: ${{ inputs.fork-token }}
         MODE: ${{ inputs.mode }}
         BEFORE: ${{ github.event.before }}
         AFTER: ${{ github.event.after }}

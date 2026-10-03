@@ -5,13 +5,14 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
+  workflow_dispatch:  # intent-inbox re-runs CI on a claim branch after it commits the intent move
 
 permissions:
   contents: read
 
 jobs:
   intent-check:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

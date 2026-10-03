@@ -302,6 +302,15 @@ def _(r):
     r.commit("ship")
 
 
+@case("inbox: own intent plus a move open/ -> shipped/", 0)
+def _(r):
+    inbox(r)
+    r.write(".intent/20261003-feature.md", intent("20261003-feature"))
+    r.write(".intent/shipped/20261003-demo.md", open(os.path.join(r.d, ".intent/open/20261003-demo.md")).read())
+    r.rm(".intent/open/20261003-demo.md")
+    r.commit("x")
+
+
 @case("inbox: deleting an open intent without shipping it", 1)
 def _(r):
     inbox(r)

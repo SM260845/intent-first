@@ -175,7 +175,7 @@ A human writes only the intent. Any coding agent or person builds it, and CI pic
 3. Anyone opens a PR with `Claims: <id>` in the body. intent-check runs that intent's `check:` lines on it.
 4. The first claiming PR whose CI passes is squash-merged, the intent moves to `.intent/shipped/`, the other claiming PRs are closed with a comment, and the issue is closed.
 
-Setup: keep the intent-check workflow from [Install](#install-in-30-seconds), and add `.github/workflows/intent-inbox.yml` (available from v1.1.0):
+Setup: keep the intent-check workflow from [Install](#install-in-30-seconds) and add `workflow_dispatch:` to its `on:`. Then add `.github/workflows/intent-inbox.yml` (available from v1.1.0):
 
 ```yaml
 name: intent-inbox
@@ -197,12 +197,12 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     concurrency: {group: intent-inbox-ship, cancel-in-progress: false}
-    permissions: {contents: write, pull-requests: write, issues: write, actions: read}
+    permissions: {contents: write, pull-requests: write, issues: write, actions: write}
     steps:
       - uses: actions/checkout@v5
         with: {persist-credentials: false}
       - uses: ao3575911/intent-first/inbox@v1
-        with: {mode: ship}   # add token: ${{ secrets.INTENT_INBOX_TOKEN }} if main is protected
+        with: {mode: ship, fork-token: "${{ secrets.INTENT_INBOX_TOKEN }}"}   # fork-token is optional
 ```
 
 Safety:
@@ -211,7 +211,8 @@ Safety:
 - A PR that claims an intent and changes `.intent/open/` fails. Only humans add intents there.
 - Claim checks run in the untrusted `pull_request` job with a read-only token and the same fork rule as `run-checks`. A fork claim whose checks were skipped fails, so it never merges.
 - The `ship` job is the trusted half. It runs on `workflow_run` with code from the default branch, never checks out the PR, and re-reads the claim, the head SHA and the changed files through the API. It only merges if every changed file is inside the intent's `touches:` and none is under `.intent/` or `.github/`, so a PR can't pass by editing the gate.
-- The move to `.intent/shipped/` is a commit pushed to the default branch. If that branch is protected, the default `GITHUB_TOKEN` can't push it. Pass a token that can, or move the file by hand. Required reviews also block the merge, which leaves the PR for a human.
+- For a same-repo claim, the `ship` job commits the move from `.intent/open/` to `.intent/shipped/` onto the PR branch, re-runs the intent-check workflow on that commit, and squash-merges that exact SHA. The move lands inside the merge, nothing is pushed to the default branch, and the default `GITHUB_TOKEN` is enough. That rename is the only `.intent/` change the job allows.
+- A fork branch can't take the push. The job merges the claim, then moves the intent with `fork-token` if set, or leaves it in `.intent/open/` with a comment. Required reviews block the merge, which leaves the PR for a human.
 
 Optional agent assignment: set `assignees: copilot-swe-agent[bot]` on the `open` step to assign each new issue to Copilot coding agent. GitHub only accepts this with a user token (`token:` set to a PAT with Issues write) and a Copilot plan that includes the coding agent. Without it, issues stay unassigned and any agent can claim them.
 
