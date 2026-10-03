@@ -273,6 +273,22 @@ def _(r):
     return "Claims: 20261003-demo"
 
 
+@case("claim: PR that adds its own intent is rejected", 1)
+def _(r):
+    inbox(r)
+    r.write("src/ok", "x\n")
+    r.write(".intent/20261003-feature.md", intent("20261003-feature"))
+    r.commit("x")
+    return "Claims: 20261003-demo"
+
+
+@case("inbox: editing a merged open intent", 1)
+def _(r):
+    inbox(r)
+    r.write(".intent/open/20261003-demo.md", intent("20261003-demo", want="Something else."))
+    r.commit("edit")
+
+
 @case("claim: intent not in .intent/open/", 1)
 def _(r):
     r.write("src/ok", "x\n")
@@ -293,7 +309,7 @@ def _(r):
     r.commit("x")
 
 
-@case("inbox: move open/ -> shipped/", 0)
+@case("inbox: open intents are immutable, so they can't move to shipped/", 1)
 def _(r):
     inbox(r)
     r.write(".intent/shipped/20261003-demo.md", open(os.path.join(r.d, ".intent/open/20261003-demo.md")).read())
@@ -302,7 +318,7 @@ def _(r):
     r.commit("ship")
 
 
-@case("inbox: own intent plus a move open/ -> shipped/", 0)
+@case("inbox: own intent plus a move is rejected", 1)
 def _(r):
     inbox(r)
     r.write(".intent/20261003-feature.md", intent("20261003-feature"))

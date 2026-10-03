@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Self-test for intent_inbox.py: claims, checks, issue text and who wins. No network."""
+"""Self-test for intent_inbox.py: claims, checks, issue text, who wins, shipped status and intake approval. No network."""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from intent_inbox import checks_of, claim_of, issue_for, out_of_scope, plan  # noqa: E402
+from intent_inbox import approvers, checks_of, claim_of, is_shipped, issue_for, out_of_scope, plan  # noqa: E402
 
 WITH = """---
 id: 20261003-demo
@@ -30,6 +30,12 @@ PRS = [  # newest first, as the API returns them
     {"number": 1, "state": "open", "merged_at": None, "body": "Claims: 20261003-other"},
 ]
 
+
+
+def rv(login, state, commit, kind="User"):
+    return {"user": {"login": login, "type": kind}, "state": state, "commit_id": commit}
+
+
 cases = [
     ("claim_of reads one claim", claim_of("x\nClaims: 20261003-demo\n") == "20261003-demo"),
     ("claim_of ignores two claims", claim_of("Claims: 20261003-a\nClaims: 20261003-b") is None),
@@ -44,10 +50,20 @@ cases = [
      plan([dict(PRS[0], state="closed", merged_at="2026-10-03T00:00:00Z")] + PRS[1:], "20261003-demo", 2)[0] is False),
     ("in-scope files may auto-merge", out_of_scope(["examples/inbox-demo/greet.sh"], ["examples/inbox-demo/"]) == []),
     ("files outside touches block auto-merge", out_of_scope(["scripts/x.py"], ["examples/inbox-demo/"]) == ["scripts/x.py"]),
-    ("the job's own open/ -> shipped/ move is exempt",
-     out_of_scope([".intent/open/X.md", ".intent/shipped/X.md", "examples/a"], ["examples/"], moved="X") == []),
-    ("only that move is exempt",
-     out_of_scope([".intent/open/X.md", ".intent/shipped/X.md"], ["examples/"], moved="Y") != []),
+    ("intent files block auto-merge", out_of_scope([".intent/open/X.md"], [".intent/"]) != []),
+    ("an issue closed with `shipped` means shipped",
+     is_shipped({"state": "closed", "labels": [{"name": "intent-open"}, {"name": "shipped"}]})),
+    ("an open or not-planned issue is not shipped",
+     not is_shipped({"state": "open", "labels": [{"name": "shipped"}]})
+     and not is_shipped({"state": "closed", "labels": [{"name": "intent-open"}]}) and not is_shipped(None)),
+    ("intake: a human approval on the head commit counts", approvers([rv("ann", "APPROVED", "h2")], "h2") == ["ann"]),
+    ("intake: a bot approval doesn't count",
+     approvers([rv("copilot-swe-agent[bot]", "APPROVED", "h2", "Bot"), rv("ci", "APPROVED", "h2", "Bot")], "h2") == []),
+    ("intake: an approval of an older commit doesn't count", approvers([rv("ann", "APPROVED", "h1")], "h2") == []),
+    ("intake: changes requested after an approval cancels it",
+     approvers([rv("ann", "APPROVED", "h2"), rv("ann", "CHANGES_REQUESTED", "h2")], "h2") == []),
+    ("intake: comments don't cancel an approval",
+     approvers([rv("ann", "APPROVED", "h2"), rv("ann", "COMMENTED", "h2")], "h2") == ["ann"]),
     ("workflow changes block auto-merge", out_of_scope([".github/workflows/x.yml"], [".github/"]) != []),
 ]
 fails = 0

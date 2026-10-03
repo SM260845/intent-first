@@ -1,0 +1,31 @@
+name: ✨ Feature request
+description: Suggest an improvement. For work you want built, propose an intent instead.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's painful or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should happen? A draft intent (Want / Not / Done when) is welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Project principles
+      options:
+        - label: This keeps the gate dependency-free (Python 3 and git) and one intent per PR.
+          required: true
+        - label: I'd be up for opening a PR with an intent file.

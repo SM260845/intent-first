@@ -2,9 +2,9 @@
 
 ## v1.1.0 (unreleased)
 
-- Intent Inbox (`ao3575911/intent-first/inbox`). An intent added to `.intent/open/` opens an `intent-open` issue. PRs claim it with `Claims: <id>`. The first claim whose CI passes gets the move to `.intent/shipped/` committed onto its branch, CI re-runs, and that exact SHA is squash-merged, so nothing is pushed to the default branch and `GITHUB_TOKEN` is enough. The other claims and the issue are closed. Fork claims are merged and the intent is moved with the optional `fork-token`, or left in `.intent/open/` with a comment. Assigning a coding agent is optional.
-- The action fills in `base-ref` (`origin/<default branch>`) and `head-ref` on `workflow_dispatch` runs, so the inbox can re-run the gate on a claim branch.
-- intent-check: `Claims: <id>` runs the `check:` lines of `.intent/open/<id>.md`. A claim fails if the intent has no `check:` lines, if the PR changes `.intent/open/`, or if its checks were skipped (fork PR). Intents may live in `.intent/open/` and `.intent/shipped/`, and moving one from `open/` to `shipped/` is allowed.
+- Intent Inbox (`ao3575911/intent-first/inbox`). Anyone may propose an intent by PR into `.intent/open/`. The `intent-intake` check (mode `intake`) fails until a human approves the PR's latest commit. A merged intent opens an `intent-open` issue. PRs claim it with `Claims: <id>`. The first claim whose CI passes is squash-merged at the SHA that passed, the other claims are closed, and the issue is closed with the `shipped` label. Intent files never move, and the default `GITHUB_TOKEN` is enough. Assigning a coding agent is optional.
+- intent-check: `Claims: <id>` runs the `check:` lines of `.intent/open/<id>.md`. A claim fails if the intent has no `check:` lines, if the PR changes `.intent/`, or if its checks were skipped (fork PR). Files in `.intent/open/` are immutable once merged.
+- Added `CONTRIBUTING.md` and issue forms.
 - Merged `ao3575911/intent-first-consumer-test` into `examples/consumer/` with its history. The new `consumer-demo` workflow runs the action against it and asserts that the valid intent passes and the junk intent fails.
 
 ## v1.0.1

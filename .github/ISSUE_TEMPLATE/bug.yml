@@ -1,0 +1,47 @@
+name: 🐛 Bug report
+description: The gate, a proof check, the inbox or git why did something wrong.
+title: "fix: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "⚠️ **Don't paste secrets or real agent sessions.** Trim and fake them first."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected vs. what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open a PR that adds .intent/20261001-example.md\n2. ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [intent-check, proof-check, Intent Inbox, git why, Action inputs, Docs, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: intent
+    attributes:
+      label: Intent file and PR body
+      description: The intent file and the `Intent:` or `Claims:` line, trimmed.
+      render: markdown
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "intent-first ref (e.g. v1.0.1 or a SHA), runner OS, Python version"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Job log (trimmed)
+      render: shell
