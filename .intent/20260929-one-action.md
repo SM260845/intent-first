@@ -1,6 +1,6 @@
 ---
 id: 20260929-one-action
-status: draft
+status: shipped
 touches: [action.yml, .github/workflows/, README.md]
 ---
 # One action for why, how and what
