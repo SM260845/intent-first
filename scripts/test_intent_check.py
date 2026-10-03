@@ -298,6 +298,7 @@ def _(r):
     inbox(r)
     r.write(".intent/shipped/20261003-demo.md", open(os.path.join(r.d, ".intent/open/20261003-demo.md")).read())
     r.rm(".intent/open/20261003-demo.md")
+    r.write("src/ok", "x\n")
     r.commit("ship")
 
 
