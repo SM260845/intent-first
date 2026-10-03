@@ -1,6 +1,6 @@
 ---
 id: 20260929-proof-carrying-prs
-status: draft
+status: shipped
 touches: [scripts/, .github/workflows/, tests/fixtures/proof/, README.md]
 ---
 # Proof-carrying PRs
