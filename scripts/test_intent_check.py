@@ -58,10 +58,12 @@ class Repo:
     def rev(self):
         return self.git("rev-parse", "HEAD").strip()
 
-    def check(self, body="", extra=()):
+    def check(self, body="", extra=(), output=None):
         bf = os.path.join(self.d, ".git", "body")
         open(bf, "w").write(body)
-        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY")}
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY", "GITHUB_OUTPUT")}
+        if output:
+            env["GITHUB_OUTPUT"] = output
         r = subprocess.run([sys.executable, CHECK, "--base", self.base, "--head", self.rev(),
                             "--pr-body-file", bf, "--run-checks", *extra], cwd=self.d, capture_output=True, text=True, env=env)
         return r.returncode, r.stdout + r.stderr
@@ -365,6 +367,100 @@ def _(r):
     r.commit("x")
 
 
+# --- skipping the gate: exempt-authors, skip-label, exempt-paths
+BOTS = "--exempt-authors=dependabot[bot],renovate[bot]"
+
+
+@case("exempt author (dependabot) with no intent passes with a notice", 0, "Skipped: the author dependabot[bot]")
+def _(r):
+    r.write("requirements.txt", "requests==2.32.4\n")
+    r.commit("Bump requests")
+    return "", ["--author=dependabot[bot]", BOTS]
+
+
+@case("a human author not in exempt-authors still needs an intent", 1, "No intent")
+def _(r):
+    r.write("requirements.txt", "requests==2.32.4\n")
+    r.commit("Bump requests")
+    return "", ["--author=someone", BOTS]
+
+
+@case("skip-label on the PR passes with a notice", 0, "label (skip-label)")
+def _(r):
+    r.write("src/a.py", "print(1)\n")
+    r.commit("typo")
+    return "", ["--skip-label=no-intent", '--labels=["docs", "No-Intent"]']
+
+
+@case("a different label doesn't skip", 1, "No intent")
+def _(r):
+    r.write("src/a.py", "print(1)\n")
+    r.commit("typo")
+    return "", ["--skip-label=no-intent", "--labels=docs,bug"]
+
+
+@case("exempt-paths: only matching files changed passes", 0, "every changed file matches exempt-paths")
+def _(r):
+    r.write("README.md", "typo fixed\n")
+    r.write("docs/guide/setup.md", "x\n")
+    r.commit("docs")
+    return "", ["--exempt-paths=**/*.md"]
+
+
+@case("exempt-paths: one file outside the globs needs an intent", 1, "No intent")
+def _(r):
+    r.write("docs/setup.md", "x\n")
+    r.write("src/a.py", "print(1)\n")
+    r.commit("docs and code")
+    return "", ["--exempt-paths=docs/\n*.md"]
+
+
+@case("exempt-paths: * stays inside one folder", 1, "No intent")
+def _(r):
+    r.write("docs/deep/setup.txt", "x\n")
+    r.commit("docs")
+    return "", ["--exempt-paths=docs/*.txt"]
+
+
+@case("exemptions never skip a PR that changes .intent/", 1, "Not skipping")
+def _(r):
+    r.write(".intent/20260101-base.md", intent("20260101-base", "shipped", "[README.md]", want="Changed."))
+    r.commit("edit shipped")
+    return "", ["--author=dependabot[bot]", BOTS]
+
+
+# --- forgiving parsing
+@case("touches: as a YAML block list", 0)
+def _(r):
+    r.write(".intent/20260928-feature.md", intent("20260928-feature", touches="X").replace("touches: X", "touches:\n  - src/\n  - 'tests/'"))
+    r.write("src/a.py", "print(1)\n")
+    r.write("tests/t.py", "print(1)\n")
+    r.commit("add")
+    return "", ["--touches=fail"]
+
+
+@case("a YAML block list for touches: is still enforced", 1, "outside touches ['src/']")
+def _(r):
+    r.write(".intent/20260928-feature.md", intent("20260928-feature", touches="X").replace("touches: X", "touches:\n- src/"))
+    r.write("lib/a.py", "print(1)\n")
+    r.commit("add")
+    return "", ["--touches=fail"]
+
+
+@case("a list item under a plain value says how to write lists", 1, "write lists as [src/, tests/]")
+def _(r):
+    r.write(".intent/20260928-feature.md", intent("20260928-feature", touches="X").replace("touches: X", "touches: src/\n  - tests/"))
+    r.commit("add")
+
+
+@case("section headings match regardless of case", 0)
+def _(r):
+    t = intent("20260928-feature").replace("## Want", "## WANT").replace("## Done when", "## Done When")
+    r.write(".intent/20260928-feature.md", t)
+    r.write("src/a.py", "print(1)\n")
+    r.commit("add")
+
+
 fails = 0
 for name, expect, contains, fn in cases:
     r = Repo()
@@ -376,5 +472,24 @@ for name, expect, contains, fn in cases:
     print(f"{'ok  ' if ok else 'FAIL'} expect={'pass' if expect == 0 else 'fail'} got={'pass' if code == 0 else 'fail'}  {name}")
     if not ok:
         print(textwrap.indent(out, "    "))
-print(f"\n{len(cases) - fails}/{len(cases)} cases behave as specified")
+
+
+def output_case(name, body, want):
+    """The action's `intent` output: set only for an intent that exists."""
+    global fails
+    r = Repo()
+    r.write("src/a.py", "print(1)\n")
+    r.commit("code")
+    out = os.path.join(r.d, ".git", "output")
+    r.check(body, output=out)
+    got = open(out).read().strip()
+    ok = got == f"intent={want}"
+    fails += not ok
+    print(f"{'ok  ' if ok else 'FAIL'} output {got!r}  {name}")
+
+
+output_case("output: an existing intent id is set", "Intent: 20260101-base", "20260101-base")
+output_case("output: a typo'd intent id is not set", "Intent: 20260101-bsae", "")
+total = len(cases) + 2
+print(f"\n{total - fails}/{total} cases behave as specified")
 sys.exit(1 if fails else 0)

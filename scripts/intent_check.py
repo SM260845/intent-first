@@ -6,12 +6,18 @@ A PR body line "Claims: <id>" claims an inbox intent in .intent/open/ (Intent In
 Usage:
   python3 scripts/intent_check.py --base <sha> --head <sha> [--pr-body-file FILE] [--run-checks]
                                   [--touches warn|fail] [--strict-touches]
+                                  [--author LOGIN] [--labels LIST] [--exempt-authors LIST]
+                                  [--exempt-paths GLOBS] [--skip-label NAME]
+
+Run it locally before you push:
+  python3 intent_check.py --base origin/main --head HEAD --run-checks
 
 Exit 0 = pass, 1 = fail. Warnings are printed as GitHub annotations.
 No dependencies beyond Python 3 and git.
 """
 import argparse
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -26,6 +32,7 @@ REQUIRED_KEYS = ("id", "status", "touches")
 REQUIRED_SECTIONS = ("Want", "Not", "Done when")
 TRAILER_RE = re.compile(r"^\s*Intent:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
 CLAIM_RE = re.compile(r"^\s*Claims:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
+RULES_URL = "https://github.com/ao3575911/intent-first#rules"
 
 errors, warnings, notes = [], [], []
 GH = os.environ.get("GITHUB_ACTIONS") == "true"
@@ -78,6 +85,14 @@ def locate(rev, id_):
     return None, None
 
 
+def canonical_section(name):
+    """'Done When' and 'done when' count as 'Done when'. Other headings stay as written."""
+    for s in REQUIRED_SECTIONS:
+        if name.lower() == s.lower():
+            return s
+    return name
+
+
 def parse(text):
     """Return (frontmatter dict, body str, section dict) or raise ValueError."""
     if not text.startswith("---\n"):
@@ -86,22 +101,30 @@ def parse(text):
     if end == -1:
         raise ValueError("unterminated frontmatter")
     fm_raw, body = text[4:end], text[end + 4:].lstrip("\n")
-    fm = {}
+    fm, last = {}, None
     for line in fm_raw.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        item = re.match(r"^\s*-\s+(.*?)\s*$", line)
+        if item and last is not None and isinstance(fm[last], list):
+            fm[last].append(item.group(1).strip("'\""))  # YAML block list: "touches:" then "  - src/"
+            continue
         if ":" not in line:
-            raise ValueError(f"bad frontmatter line: {line!r}")
+            hint = " (write lists as [src/, tests/] or as '- ' lines under the key)" if item else ""
+            raise ValueError(f"bad frontmatter line: {line!r}{hint}")
         k, v = line.split(":", 1)
         v = v.strip()
         if v.startswith("[") and v.endswith("]"):
             v = [x.strip().strip("'\"") for x in v[1:-1].split(",") if x.strip()]
-        fm[k.strip()] = v
+        elif not v:
+            v = []  # an empty value starts a block list; stays empty (and falsy) if none follows
+        last = k.strip()
+        fm[last] = v
     sections, cur = {}, None
     for line in body.splitlines():
         m = re.match(r"^##\s+(.+?)\s*$", line)
         if m:
-            cur = m.group(1)
+            cur = canonical_section(m.group(1))
             sections[cur] = []
         elif cur:
             sections[cur].append(line)
@@ -165,6 +188,54 @@ def validate(path, text):
     return fm
 
 
+def split_list(value):
+    """Comma- or newline-separated list, or a JSON array of strings."""
+    value = (value or "").strip()
+    if value in ("", "null", "[]"):
+        return []
+    if value.startswith("["):
+        try:
+            return [str(x).strip() for x in json.loads(value) if str(x).strip()]
+        except ValueError:
+            pass
+    return [x.strip() for x in re.split(r"[,\n]", value) if x.strip()]
+
+
+def glob_re(pat):
+    """A path glob as a regex. ** spans directories, * and ? stay inside one segment, and a trailing / means the whole folder."""
+    if pat.endswith("/"):
+        pat += "**"
+    out, i = "", 0
+    while i < len(pat):
+        if pat.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif pat.startswith("**", i):
+            out, i = out + ".*", i + 2
+        else:
+            out += {"*": "[^/]*", "?": "[^/]"}.get(pat[i], re.escape(pat[i]))
+            i += 1
+    return re.compile(out + r"\Z")
+
+
+def exemption(a, changes):
+    """Why this PR doesn't need an intent, or None. Never applies to a PR that changes .intent/."""
+    reason = None
+    authors = [x.lower() for x in split_list(a.exempt_authors)]
+    labels = [x.lower() for x in split_list(a.labels)]
+    globs = split_list(a.exempt_paths)
+    paths = [p for _, p in changes]
+    if a.author and a.author.lower() in authors:
+        reason = f"the author {a.author} is in exempt-authors"
+    elif a.skip_label and a.skip_label.lower() in labels:
+        reason = f"the PR has the '{a.skip_label}' label (skip-label)"
+    elif globs and paths and all(any(glob_re(g).match(p) for g in globs) for p in paths):
+        reason = f"every changed file matches exempt-paths ({', '.join(globs)})"
+    if reason and any(p.startswith(INTENT_DIR) for p in paths):
+        note(f"Not skipping, although {reason}: this PR changes {INTENT_DIR}, so the full gate runs.")
+        return None
+    return reason
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
@@ -175,6 +246,11 @@ def main():
                     help="what to do with changed paths outside the intent's touches: list")
     ap.add_argument("--strict-touches", dest="touches", action="store_const", const="fail",
                     help="same as --touches=fail")
+    ap.add_argument("--author", default="", help="the PR author's login, for --exempt-authors")
+    ap.add_argument("--labels", default="", help="the PR's labels: comma-separated or a JSON array, for --skip-label")
+    ap.add_argument("--exempt-authors", default="", help="comma-separated logins whose PRs don't need an intent")
+    ap.add_argument("--exempt-paths", default="", help="comma- or newline-separated globs; a PR that only changes matching files doesn't need an intent")
+    ap.add_argument("--skip-label", default="", help="a PR with this label doesn't need an intent")
     a = ap.parse_args()
 
     base = git("merge-base", a.base, a.head).strip()
@@ -184,6 +260,20 @@ def main():
     code_paths = [p for s, p in changes if not p.startswith(INTENT_DIR)]
 
     print(f"base {base[:12]}  head {a.head[:12]}  files changed: {len(changes)}")
+
+    skipped = exemption(a, changes)
+    if skipped:
+        note(f"Skipped: {skipped}, so this PR doesn't need an intent.")
+        print("\n0 error(s), 0 warning(s)")
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as f:
+                f.write(f"## intent-check: skipped\n\nSkipped: {skipped}, so this PR doesn't need an intent.\n")
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a", encoding="utf-8") as f:
+                f.write("intent=\n")
+        return 0
 
     # --- 1. schema of every intent file this PR adds or modifies
     added, modified, inbox = {}, {}, {}
@@ -336,11 +426,12 @@ def main():
                 f.write("\n**How to fix:** add exactly one `.intent/YYYYMMDD-slug.md` with frontmatter "
                         "(`id`, `status`, `touches`) and non-empty `## Want`, `## Not`, `## Done when` sections, "
                         "or reference an existing draft with an `Intent: <id>` line in the PR body or a commit trailer. "
-                        "Rules: https://github.com/ao3575911/intent-first#rules\n")
+                        f"Rules: {RULES_URL}\n")
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:
-            valid_id = intent_id and FILENAME_RE.match(f"{intent_id}.md")
+            valid_id = intent_id and FILENAME_RE.match(f"{intent_id}.md") and \
+                (locate(a.head, intent_id)[0] or locate(base, intent_id)[0])
             f.write(f"intent={intent_id if valid_id else ''}\n")
     return 1 if errors else 0
 

@@ -19,7 +19,7 @@ Checks per bundle:
   5. the linked commit is in this PR, and nothing but .proof/ or .intent/
      changed after it (so code can't be swapped in after the session)
 
-PRs without a bundle pass with a notice: they are treated as human-authored.
+PRs without a bundle pass with a notice. Bundles are optional unless --require-proof is set.
 """
 import argparse
 import base64
@@ -280,7 +280,8 @@ def main():
         if a.require_proof:
             print("::error::no proof bundle in this PR (.proof/<intent>.json) and --require-proof is set")
             return 1
-        print("::notice::no proof bundle in this PR; treated as human-authored")
+        print("::notice::No agent session proof (.proof/<intent>.json) in this PR, so there is nothing to verify. "
+              "You only need one if you record agent sessions.")
         return 0
     pr_commits = set(git("rev-list", "%s..%s" % (a.base, a.head)).splitlines())
     failed = False
