@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """intent-check: the one gate an intent-first repo needs.
 
+A PR body line "Claims: <id>" claims an inbox intent in .intent/open/ (Intent Inbox).
+
 Usage:
   python3 scripts/intent_check.py --base <sha> --head <sha> [--pr-body-file FILE] [--run-checks]
                                   [--touches warn|fail] [--strict-touches]
@@ -16,11 +18,14 @@ import subprocess
 import sys
 
 INTENT_DIR = ".intent/"
+OPEN_DIR = INTENT_DIR + "open/"        # Intent Inbox: open for claims, added by humans only
+SHIPPED_DIR = INTENT_DIR + "shipped/"  # Intent Inbox: moved here when a claim is merged
 FILENAME_RE = re.compile(r"^(\d{8})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 STATUSES = {"draft", "shipped"}
 REQUIRED_KEYS = ("id", "status", "touches")
 REQUIRED_SECTIONS = ("Want", "Not", "Done when")
 TRAILER_RE = re.compile(r"^\s*Intent:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
+CLAIM_RE = re.compile(r"^\s*Claims:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
 
 errors, warnings, notes = [], [], []
 GH = os.environ.get("GITHUB_ACTIONS") == "true"
@@ -62,6 +67,15 @@ def git(*args, check=True):
 def show(rev, path):
     r = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True)
     return r.stdout if r.returncode == 0 else None
+
+
+def locate(rev, id_):
+    """(path, text) of intent id_ at rev, in .intent/, .intent/open/ or .intent/shipped/."""
+    for d in (INTENT_DIR, OPEN_DIR, SHIPPED_DIR):
+        t = show(rev, f"{d}{id_}.md")
+        if t is not None:
+            return f"{d}{id_}.md", t
+    return None, None
 
 
 def parse(text):
@@ -109,7 +123,11 @@ def done_when_checks(sections):
 
 def validate(path, text):
     """Schema check. Returns frontmatter or None."""
-    name = path[len(INTENT_DIR):]
+    rel = path[len(INTENT_DIR):]
+    if "/" in rel and not path.startswith((OPEN_DIR, SHIPPED_DIR)):
+        err(f"{path}: intents live in {INTENT_DIR}, {OPEN_DIR} or {SHIPPED_DIR}", path)
+        return None
+    name = os.path.basename(rel)
     m = FILENAME_RE.match(name)
     if not m:
         err(f"{path}: filename must be YYYYMMDD-slug.md (e.g. 20260928-rate-limit-login.md)", path)
@@ -168,16 +186,22 @@ def main():
     print(f"base {base[:12]}  head {a.head[:12]}  files changed: {len(changes)}")
 
     # --- 1. schema of every intent file this PR adds or modifies
-    added, modified = {}, {}
+    added, modified, inbox = {}, {}, {}
     for status, path in intent_changes:
+        stem = os.path.basename(path)
+        stem = stem[:-3] if stem.endswith(".md") else stem
         if status == "D":
-            err(f"{path}: deleting intents is not allowed. Intents are a log; supersede instead.", path)
+            if path.startswith(OPEN_DIR) and ("A", f"{SHIPPED_DIR}{stem}.md") in intent_changes:
+                note(f"{stem}: moved from {OPEN_DIR} to {SHIPPED_DIR}")
+            else:
+                err(f"{path}: deleting intents is not allowed. Intents are a log; supersede instead.", path)
             continue
         text = show(a.head, path) or ""
         fm = validate(path, text)
-        stem = path[len(INTENT_DIR):]
-        stem = stem[:-3] if stem.endswith(".md") else stem
-        (added if status == "A" else modified)[stem] = (path, fm)
+        if path.startswith(OPEN_DIR):
+            inbox[stem] = (path, fm)
+        else:
+            (added if status == "A" else modified)[stem] = (path, fm)
 
     # --- 3. immutability: shipped intents cannot change at all
     for stem, (path, fm) in modified.items():
@@ -190,24 +214,45 @@ def main():
                 note(f"{stem}: status flip draft -> shipped")
 
     # --- gate: collect referenced intent ids
-    refs = set()
+    refs, body = set(), ""
     if a.pr_body_file and os.path.exists(a.pr_body_file):
-        refs |= set(TRAILER_RE.findall(open(a.pr_body_file, encoding="utf-8").read()))
+        body = open(a.pr_body_file, encoding="utf-8").read()
+        refs |= set(TRAILER_RE.findall(body))
     log = git("log", "--format=%B%x00", f"{base}..{a.head}")
     refs |= set(TRAILER_RE.findall(log))
 
     for r in sorted(refs - set(added)):
-        path = f"{INTENT_DIR}{r}.md"
-        base_fm = parse_safe(show(base, path))
-        head_text = show(a.head, path)
+        base_text = locate(base, r)[1]
+        base_fm = parse_safe(base_text)
+        head_text = locate(a.head, r)[1]
         if base_fm is None and head_text is None:
             err(f"Intent: {r} does not exist in .intent/")
         elif base_fm is not None and base_fm.get("status") == "shipped":
             err(f"Intent: {r} is already shipped. Reference a draft intent, or add a new one (use 'supersedes:' to replace it).")
 
-    ids = set(added) | set(modified) | refs
+    # --- Intent Inbox: "Claims: <id>" takes an intent from .intent/open/ and must run its checks
+    claims, claim_fm = set(CLAIM_RE.findall(body)), None
+    if len(claims) > 1:
+        err(f"One PR, one claim. This PR claims {len(claims)}: {', '.join(sorted(claims))}")
+    for c in sorted(claims)[:1]:
+        if any(p.startswith(OPEN_DIR) for _, p in changes):
+            err(f"A PR that claims an intent can't change {OPEN_DIR}. Only humans add intents there.")
+        text = show(base, f"{OPEN_DIR}{c}.md")
+        if text is None:
+            where = locate(base, c)[0]
+            err(f"Claims: {c} is not open" + (f" (it is at {where})." if where else f": {OPEN_DIR}{c}.md does not exist on the base branch."))
+            continue
+        claim_fm = validate(f"{OPEN_DIR}{c}.md", text)
+        if claim_fm and not any(b["check"] for b in done_when_checks(claim_fm["_sections"])):
+            err(f"Claims: {c} can't be claimed. Its Done when has no check: lines, so CI can't prove a PR done.")
+        if not a.run_checks:
+            err(f"Claims: {c} needs its check: lines to run, and they were skipped (fork PR or run-checks: false).")
+
+    ids = set(added) | set(modified) | refs | claims
     # --- 1. the gate: exactly ONE intent
-    if len(ids) == 0:
+    if len(ids) == 0 and inbox:
+        note(f"Adds or edits inbox intents only: {', '.join(sorted(inbox))}")
+    elif len(ids) == 0:
         err("No intent. Add one .intent/YYYYMMDD-slug.md, or reference an existing draft with an 'Intent: <id>' line in the PR body or a commit trailer.")
     elif len(ids) > 1:
         err(f"One PR, one intent. This PR references {len(ids)}: {', '.join(sorted(ids))}")
@@ -237,9 +282,11 @@ def main():
             fm = added[intent_id][1]
         elif intent_id in modified:
             fm = modified[intent_id][1]
+        elif intent_id in claims:
+            fm = claim_fm
         else:
-            t = show(a.head, f"{INTENT_DIR}{intent_id}.md")
-            fm = validate(f"{INTENT_DIR}{intent_id}.md", t) if t else None
+            p, t = locate(a.head, intent_id)
+            fm = validate(p, t) if t else None
 
     # --- 8. touches: warn (or, with --touches=fail, fail) on paths outside scope
     if fm and isinstance(fm.get("touches"), list):
@@ -274,7 +321,7 @@ def main():
             f.write(f"## intent-check: {'❌ FAIL' if errors else '✅ PASS'}\n\n")
             f.write(f"**Intent:** `{intent_id or 'none'}`")
             if fm and fm.get("_sections"):
-                title = re.search(r"^#\s+(.+)$", show(a.head, f"{INTENT_DIR}{intent_id}.md") or "", re.M)
+                title = re.search(r"^#\s+(.+)$", locate(a.head, intent_id)[1] or "", re.M)
                 f.write(f" ({title.group(1).strip()})" if title else "")
             f.write(f"  \n**Touches mode:** {a.touches}\n\n")
             for label, items in (("Error", errors), ("Warning", warnings), ("Note", notes)):

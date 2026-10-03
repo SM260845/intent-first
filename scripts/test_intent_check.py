@@ -233,6 +233,87 @@ def _(r):
     return "", ["--strict-touches"]
 
 
+def inbox(r, done="- ok exists\n  check: `test -f src/ok`\n"):
+    """Put an open inbox intent on the base branch."""
+    r.write(".intent/open/20261003-demo.md", intent("20261003-demo", done=done))
+    r.commit("open")
+    r.base = r.rev()
+
+
+@case("claim: inbox intent's checks pass", 0)
+def _(r):
+    inbox(r)
+    r.write("src/ok", "x\n")
+    r.commit("x")
+    return "Claims: 20261003-demo"
+
+
+@case("claim: inbox intent's checks fail", 1)
+def _(r):
+    inbox(r)
+    r.write("src/other", "x\n")
+    r.commit("x")
+    return "Claims: 20261003-demo"
+
+
+@case("claim: intent without check: lines can't be claimed", 1)
+def _(r):
+    inbox(r, done="- it works\n")
+    r.write("src/ok", "x\n")
+    r.commit("x")
+    return "Claims: 20261003-demo"
+
+
+@case("claim: PR that changes .intent/open/ is rejected", 1)
+def _(r):
+    inbox(r)
+    r.write("src/ok", "x\n")
+    r.write(".intent/open/20261003-more.md", intent("20261003-more"))
+    r.commit("x")
+    return "Claims: 20261003-demo"
+
+
+@case("claim: intent not in .intent/open/", 1)
+def _(r):
+    r.write("src/ok", "x\n")
+    r.commit("x")
+    return "Claims: 20261003-demo"
+
+
+@case("inbox: human adds an open intent only", 0)
+def _(r):
+    r.write(".intent/open/20261003-demo.md", intent("20261003-demo"))
+    r.commit("open")
+
+
+@case("inbox: own intent plus an open intent", 0)
+def _(r):
+    r.write(".intent/20261003-feature.md", intent("20261003-feature"))
+    r.write(".intent/open/20261003-demo.md", intent("20261003-demo"))
+    r.commit("x")
+
+
+@case("inbox: move open/ -> shipped/", 0)
+def _(r):
+    inbox(r)
+    r.write(".intent/shipped/20261003-demo.md", open(os.path.join(r.d, ".intent/open/20261003-demo.md")).read())
+    r.rm(".intent/open/20261003-demo.md")
+    r.commit("ship")
+
+
+@case("inbox: deleting an open intent without shipping it", 1)
+def _(r):
+    inbox(r)
+    r.rm(".intent/open/20261003-demo.md")
+    r.commit("rm")
+
+
+@case("intents outside .intent/, open/ and shipped/ are rejected", 1)
+def _(r):
+    r.write(".intent/misc/20261003-demo.md", intent("20261003-demo"))
+    r.commit("x")
+
+
 fails = 0
 for name, expect, fn in cases:
     r = Repo()
