@@ -1,0 +1,26 @@
+name: move-major-tag
+
+# When a release like v1.2.3 is published, point the floating v1 tag at it,
+# so `uses: ao3575911/intent-first@v1` always gets the latest v1 release.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  move:
+    if: startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          major="${TAG%%.*}"
+          git tag -f "$major" "$(git rev-parse "$TAG^{commit}")"
+          git push -f origin "refs/tags/$major"
+          echo "Moved $major to $TAG" >> "$GITHUB_STEP_SUMMARY"

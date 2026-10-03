@@ -3,12 +3,15 @@ name: proof-carrying-pr
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   intent-check:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -21,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - run: pipx run ruff check .
       - run: python3 scripts/test_intent_check.py
       - run: python3 scripts/test_proof_check.py
       - run: python3 scripts/test_git_why.py
