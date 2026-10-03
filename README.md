@@ -166,14 +166,64 @@ git add .proof/ && git commit -m "proof for 20260928-rate-limit-login"
 
 PRs without a bundle pass with a notice and are treated as human-authored. The bundle proves the session record wasn't altered. It doesn't prove the agent reported truthfully, or that the code is correct.
 
+## Intent Inbox
+
+A human writes only the intent. Any coding agent or person builds it, and CI picks the winner.
+
+1. A human adds `.intent/open/<id>.md` (Want / Not / Done when, with `check:` lines) and merges it.
+2. The inbox opens an issue labelled `intent-open` with the intent and how to claim it.
+3. Anyone opens a PR with `Claims: <id>` in the body. intent-check runs that intent's `check:` lines on it.
+4. The first claiming PR whose CI passes is squash-merged, the intent moves to `.intent/shipped/`, the other claiming PRs are closed with a comment, and the issue is closed.
+
+Setup: keep the intent-check workflow from [Install](#install-in-30-seconds), and add `.github/workflows/intent-inbox.yml` (available from v1.1.0):
+
+```yaml
+name: intent-inbox
+on:
+  push: {branches: [main], paths: [".intent/open/**"]}
+  workflow_run: {workflows: [intent-check], types: [completed]}   # the name of your intent-check workflow
+permissions: {}
+jobs:
+  open:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions: {contents: read, issues: write}
+    steps:
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: ao3575911/intent-first/inbox@v1
+        with: {mode: open}
+  ship:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    concurrency: {group: intent-inbox-ship, cancel-in-progress: false}
+    permissions: {contents: write, pull-requests: write, issues: write, actions: read}
+    steps:
+      - uses: actions/checkout@v5
+        with: {persist-credentials: false}
+      - uses: ao3575911/intent-first/inbox@v1
+        with: {mode: ship}   # add token: ${{ secrets.INTENT_INBOX_TOKEN }} if main is protected
+```
+
+Safety:
+
+- An intent without `check:` lines can't be claimed. The issue says so, claiming PRs fail, and nothing is merged.
+- A PR that claims an intent and changes `.intent/open/` fails. Only humans add intents there.
+- Claim checks run in the untrusted `pull_request` job with a read-only token and the same fork rule as `run-checks`. A fork claim whose checks were skipped fails, so it never merges.
+- The `ship` job is the trusted half. It runs on `workflow_run` with code from the default branch, never checks out the PR, and re-reads the claim, the head SHA and the changed files through the API. It only merges if every changed file is inside the intent's `touches:` and none is under `.intent/` or `.github/`, so a PR can't pass by editing the gate.
+- The move to `.intent/shipped/` is a commit pushed to the default branch. If that branch is protected, the default `GITHUB_TOKEN` can't push it. Pass a token that can, or move the file by hand. Required reviews also block the merge, which leaves the PR for a human.
+
+Optional agent assignment: set `assignees: copilot-swe-agent[bot]` on the `open` step to assign each new issue to Copilot coding agent. GitHub only accepts this with a user token (`token:` set to a PAT with Issues write) and a Copilot plan that includes the coding agent. Without it, issues stay unassigned and any agent can claim them.
+
 ## Layout
 
 | Path | What it is |
 |---|---|
 | `action.yml` | The composite action (intent-check, then proof-check) |
 | `scripts/` | `intent_check.py`, `proof_check.py` and their self-tests |
+| `inbox/` | The Intent Inbox action: open an issue per intent, ship the first passing claim |
 | `bin/git-why` | `git why <file>:<line>` |
-| `.intent/` | This repo's own intents |
+| `.intent/` | This repo's own intents. `open/` holds inbox intents, `shipped/` the ones the inbox merged |
 | `examples/consumer/` | Example consumer repo, used by the `consumer-demo` workflow. Formerly `ao3575911/intent-first-consumer-test`, merged here with its history |
 | `src/`, `tests/` | The demo rate limiter used by the walkthrough PRs |
 

@@ -1,0 +1,28 @@
+name: Intent Inbox
+description: Opens an issue for each intent added to .intent/open/, and merges the first PR whose claimed intent's checks pass.
+author: ao3575911
+branding:
+  icon: inbox
+  color: green
+inputs:
+  mode:
+    description: "`open` (on push to the default branch) or `ship` (on workflow_run, completed)."
+    required: true
+  token:
+    description: Token for the GitHub API and the move commit. Needs push access to the default branch if it is protected.
+    default: ${{ github.token }}
+  assignees:
+    description: Optional comma-separated logins to assign each new intent issue to, e.g. copilot-swe-agent[bot]. Needs a user token.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        INBOX_ASSIGNEES: ${{ inputs.assignees }}
+        MODE: ${{ inputs.mode }}
+        BEFORE: ${{ github.event.before }}
+        AFTER: ${{ github.event.after }}
+        RUN_ID: ${{ github.event.workflow_run.id }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/intent_inbox.py" "$MODE"

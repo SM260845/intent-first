@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## v1.1.0 (unreleased)
 
+- Intent Inbox (`ao3575911/intent-first/inbox`). An intent added to `.intent/open/` opens an `intent-open` issue. PRs claim it with `Claims: <id>`. The first claim whose CI passes is squash-merged, the intent moves to `.intent/shipped/`, and the other claims and the issue are closed. Assigning a coding agent is optional.
+- intent-check: `Claims: <id>` runs the `check:` lines of `.intent/open/<id>.md`. A claim fails if the intent has no `check:` lines, if the PR changes `.intent/open/`, or if its checks were skipped (fork PR). Intents may live in `.intent/open/` and `.intent/shipped/`, and moving one from `open/` to `shipped/` is allowed.
 - Merged `ao3575911/intent-first-consumer-test` into `examples/consumer/` with its history. The new `consumer-demo` workflow runs the action against it and asserts that the valid intent passes and the junk intent fails.
 
 ## v1.0.1
