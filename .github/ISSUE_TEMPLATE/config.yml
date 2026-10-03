@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📝 Propose work as an intent
+    url: https://github.com/ao3575911/intent-first#intent-inbox
+    about: Add an intent to .intent/open/ by PR. Once a maintainer approves it, anyone can claim it.
+  - name: 💬 Questions & ideas
+    url: https://github.com/ao3575911/intent-first/discussions
+    about: Ask or brainstorm in Discussions.

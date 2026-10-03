@@ -42,12 +42,8 @@ runs:
         PR_BASE: ${{ github.event.pull_request.base.sha }}
         PR_HEAD: ${{ github.event.pull_request.head.sha }}
         PR_BODY: ${{ github.event.pull_request.body }}
-        EVENT: ${{ github.event_name }}
-        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        SHA: ${{ github.sha }}
       run: |
         base="${IN_BASE:-$PR_BASE}"; head="${IN_HEAD:-$PR_HEAD}"
-        if [ "$EVENT" = workflow_dispatch ]; then base="${base:-origin/$DEFAULT_BRANCH}"; head="${head:-$SHA}"; fi
         if ! git rev-parse --git-dir >/dev/null 2>&1; then
           echo "::error title=intent-check::No git checkout. Add 'uses: actions/checkout@v5' with 'fetch-depth: 0' before this action."
           exit 1

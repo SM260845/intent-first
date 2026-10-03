@@ -1,0 +1,24 @@
+name: intent-intake
+
+# Anyone, human or agent, may propose an intent by PR into .intent/open/. This
+# check fails such a PR until a human (not a bot) approves its latest commit,
+# and re-runs when a review is submitted or dismissed. It reads PR metadata
+# through the API only. Make it a required status check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  intent-intake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5   # this repo runs ./inbox from the PR, like intent-check runs ./; consumers pin @v1
+        with: {persist-credentials: false}
+      - uses: ./inbox
+        with: {mode: intake}

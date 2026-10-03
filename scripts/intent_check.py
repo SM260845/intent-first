@@ -18,8 +18,8 @@ import subprocess
 import sys
 
 INTENT_DIR = ".intent/"
-OPEN_DIR = INTENT_DIR + "open/"        # Intent Inbox: open for claims, added by humans only
-SHIPPED_DIR = INTENT_DIR + "shipped/"  # Intent Inbox: moved here when a claim is merged
+OPEN_DIR = INTENT_DIR + "open/"        # Intent Inbox: open for claims; immutable once merged
+SHIPPED_DIR = INTENT_DIR + "shipped/"  # Intent Inbox, legacy: kept as is; the issue now carries the status
 FILENAME_RE = re.compile(r"^(\d{8})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 STATUSES = {"draft", "shipped"}
 REQUIRED_KEYS = ("id", "status", "touches")
@@ -186,22 +186,19 @@ def main():
     print(f"base {base[:12]}  head {a.head[:12]}  files changed: {len(changes)}")
 
     # --- 1. schema of every intent file this PR adds or modifies
-    added, modified, inbox, moved = {}, {}, {}, {}
+    added, modified, inbox = {}, {}, {}
     for status, path in intent_changes:
         stem = os.path.basename(path)
         stem = stem[:-3] if stem.endswith(".md") else stem
         if status == "D":
-            if path.startswith(OPEN_DIR) and ("A", f"{SHIPPED_DIR}{stem}.md") in intent_changes:
-                note(f"{stem}: moved from {OPEN_DIR} to {SHIPPED_DIR}")
-            else:
-                err(f"{path}: deleting intents is not allowed. Intents are a log; supersede instead.", path)
+            err(f"{path}: deleting intents is not allowed. Intents are a log; supersede instead.", path)
             continue
+        if path.startswith(OPEN_DIR) and status != "A":
+            err(f"{path}: intents in {OPEN_DIR} are immutable once merged. Propose a new intent instead.", path)
         text = show(a.head, path) or ""
         fm = validate(path, text)
         if path.startswith(OPEN_DIR):
             inbox[stem] = (path, fm)
-        elif status == "A" and path.startswith(SHIPPED_DIR) and ("D", f"{OPEN_DIR}{stem}.md") in intent_changes:
-            moved[stem] = (path, fm)
         else:
             (added if status == "A" else modified)[stem] = (path, fm)
 
@@ -237,8 +234,8 @@ def main():
     if len(claims) > 1:
         err(f"One PR, one claim. This PR claims {len(claims)}: {', '.join(sorted(claims))}")
     for c in sorted(claims)[:1]:
-        if any(p.startswith(OPEN_DIR) for _, p in changes):
-            err(f"A PR that claims an intent can't change {OPEN_DIR}. Only humans add intents there.")
+        if any(p.startswith(INTENT_DIR) for _, p in changes):
+            err(f"A PR that claims an intent can't change {INTENT_DIR}.")
         text = show(base, f"{OPEN_DIR}{c}.md")
         if text is None:
             where = locate(base, c)[0]
@@ -251,11 +248,9 @@ def main():
             err(f"Claims: {c} needs its check: lines to run, and they were skipped (fork PR or run-checks: false).")
 
     ids = set(added) | set(modified) | refs | claims
-    if not ids and len(moved) == 1:  # a lone open/ -> shipped/ move is about that intent, so its checks run
-        ids = set(moved)
     # --- 1. the gate: exactly ONE intent
-    if len(ids) == 0 and (inbox or moved):
-        note(f"Adds, edits or moves inbox intents only: {', '.join(sorted(set(inbox) | set(moved)))}")
+    if len(ids) == 0 and inbox:
+        note(f"Proposes inbox intents only: {', '.join(sorted(inbox))} (intent-intake requires a human approval)")
     elif len(ids) == 0:
         err("No intent. Add one .intent/YYYYMMDD-slug.md, or reference an existing draft with an 'Intent: <id>' line in the PR body or a commit trailer.")
     elif len(ids) > 1:
@@ -286,8 +281,6 @@ def main():
             fm = added[intent_id][1]
         elif intent_id in modified:
             fm = modified[intent_id][1]
-        elif intent_id in moved:
-            fm = moved[intent_id][1]
         elif intent_id in claims:
             fm = claim_fm
         else:
