@@ -1,6 +1,6 @@
 ---
 id: 20260929-require-proof
-status: draft
+status: shipped
 touches: [scripts/, action.yml, README.md]
 ---
 # Optional require-proof mode
