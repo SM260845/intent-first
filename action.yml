@@ -1,5 +1,5 @@
 name: Intent-First Gate
-description: One intent per PR. Checks the .intent/ file (Want / Not / Done when), runs its checks, and verifies any sealed agent session proof.
+description: One intent per PR. Checks the .intent/ file (Want / Not / Done when) and runs its checks.
 author: ao3575911
 branding:
   icon: check-circle
