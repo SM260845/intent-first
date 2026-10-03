@@ -51,4 +51,4 @@ More under [good first issue](https://github.com/ao3575911/intent-first/labels/g
 
 ## Security
 
-Don't post security issues or exploit details in a public issue. Contact @ao3575911 privately instead.
+Report security issues privately through [GitHub private vulnerability reporting](https://github.com/ao3575911/intent-first/security/advisories/new), not in public issues.
