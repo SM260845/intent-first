@@ -9,7 +9,9 @@ git clone https://github.com/ao3575911/intent-first && cd intent-first
 python3 scripts/test_intent_check.py   # gate rules
 python3 scripts/test_proof_check.py    # proof bundles (needs openssl)
 python3 scripts/test_intent_inbox.py   # Intent Inbox
+python3 scripts/test_intent_inbox_api.py   # Intent Inbox against a fake GitHub API
 python3 scripts/test_git_why.py        # git why
+python3 -m unittest discover -s tests  # example code
 pipx run ruff check .
 ```
 

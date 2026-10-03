@@ -1,12 +1,12 @@
 name: Intent Inbox
-description: Gates new .intent/open/ intents on a human approval, opens an issue for each, and merges the first PR whose claimed intent's checks pass.
+description: Gates .intent/open/ changes on a maintainer's approval, opens an issue for each new intent, and merges the first PR whose claimed intent's checks pass.
 author: ao3575911
 branding:
   icon: inbox
   color: green
 inputs:
   mode:
-    description: "`intake` (on pull_request and pull_request_review), `open` (on push to the default branch) or `ship` (on workflow_run, completed)."
+    description: "`intake` (on pull_request and pull_request_review), `open` (on push to the default branch), `claims` (on workflow_run, schedule or workflow_dispatch; outputs the passing claims) or `ship` (merges the claim whose run passed)."
     required: true
   token:
     description: Token for the GitHub API.
@@ -14,17 +14,33 @@ inputs:
   assignees:
     description: Optional comma-separated logins to assign each new intent issue to, e.g. copilot-swe-agent[bot]. Needs a user token.
     default: ""
+  workflow:
+    description: For `claims` on a schedule. The file name of the workflow that runs intent-check on claim PRs, e.g. intent-check.yml.
+    default: ""
+  run-id:
+    description: For `ship`. The id of the CI run that passed. Defaults to the triggering workflow_run.
+    default: ""
+  protect:
+    description: For `ship`. Comma-separated paths a claim may never change, on top of .intent/ and .github/, e.g. action.yml,scripts/.
+    default: ""
+outputs:
+  claims:
+    description: "From `claims`: a JSON list of {intent, run}, the earliest passing claim per intent."
+    value: ${{ steps.inbox.outputs.claims }}
 runs:
   using: composite
   steps:
-    - shell: bash
+    - id: inbox
+      shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         INBOX_ASSIGNEES: ${{ inputs.assignees }}
+        INBOX_WORKFLOW: ${{ inputs.workflow }}
+        INBOX_PROTECT: ${{ inputs.protect }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         MODE: ${{ inputs.mode }}
         BEFORE: ${{ github.event.before }}
         AFTER: ${{ github.event.after }}
-        RUN_ID: ${{ github.event.workflow_run.id }}
+        RUN_ID: ${{ inputs.run-id || github.event.workflow_run.id }}
       run: python3 "$GITHUB_ACTION_PATH/../scripts/intent_inbox.py" "$MODE"
