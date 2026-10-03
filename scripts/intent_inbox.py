@@ -76,8 +76,8 @@ def out_of_scope(files, touches, moved=None):
     `moved` exempts exactly the open/ -> shipped/ rename of that intent, which only the ship job commits."""
     scope = touches if isinstance(touches, list) else []
     exempt = {f"{OPEN_DIR}{moved}.md", f"{SHIPPED_DIR}{moved}.md"} if moved else set()
-    return [f for f in files if f not in exempt and f.startswith((".intent/", ".github/"))
-            or not any(f == t or f.startswith(t.rstrip("/") + "/") for t in scope)]
+    return [f for f in files if f not in exempt and (f.startswith((".intent/", ".github/"))
+            or not any(f == t or f.startswith(t.rstrip("/") + "/") for t in scope))]
 
 
 def plan(prs, id_, number):
