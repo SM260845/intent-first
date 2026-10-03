@@ -263,7 +263,13 @@ def main():
             continue
         old = fm["supersedes"]
         old_path = f"{INTENT_DIR}{old}.md"
-        old_fm = parse_safe(show(base, old_path))
+        old_text = show(base, old_path)
+        if old_text is None:
+            shipped_path = f"{SHIPPED_DIR}{old}.md"
+            old_text = show(base, shipped_path)
+            if old_text is not None:
+                old_path = shipped_path
+        old_fm = parse_safe(old_text)
         if old_fm is None:
             err(f"{path}: supersedes '{old}' but {old_path} does not exist on the base branch", path)
         else:
