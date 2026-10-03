@@ -18,14 +18,23 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: ./
+          persist-credentials: false
+      - uses: actions/checkout@v5   # the gate from the base commit, so a PR can't rewrite the checker that judges it
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .gate
+          persist-credentials: false
+      - uses: ./.gate
 
   selftest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with: {persist-credentials: false}
       - run: pipx run ruff check .
       - run: python3 scripts/test_intent_check.py
       - run: python3 scripts/test_proof_check.py
       - run: python3 scripts/test_intent_inbox.py
+      - run: python3 scripts/test_intent_inbox_api.py
       - run: python3 scripts/test_git_why.py
+      - run: python3 -m unittest discover -s tests
