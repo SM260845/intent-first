@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Self-test for bin/git-why. Builds throwaway git repos and asserts what `git why` prints."""
+import datetime
 import json
 import os
 import subprocess
@@ -7,7 +8,10 @@ import sys
 import tempfile
 import textwrap
 
-WHY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "git-why")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WHY = os.path.join(ROOT, "bin", "git-why")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import intent_check  # noqa: E402
 ENV = {**os.environ, "GIT_WHY_NO_GH": "1", "GIT_AUTHOR_DATE": "2026-10-01T00:00:00", "GIT_COMMITTER_DATE": "2026-10-01T00:00:00"}
 
 
@@ -191,6 +195,52 @@ def _(r):
         return ["output is not JSON"], out
     want = {"intent": "20261001-feature", "status": "draft", "pr": 3, "want": "Something.", "found_via": "commit trailer"}
     return [f"{k}={d.get(k)!r}, want {v!r}" for k, v in want.items() if d.get(k) != v] + ([f"exit {code}"] if code else []), out
+
+
+@case("Claims: trailer and an intent in .intent/open/")
+def _(r):
+    r.write(".intent/open/20261003-demo.md", intent("20261003-demo", want="Open for claims."))
+    r.commit("Open inbox intent")
+    r.write("src/a.py", "a = 1\n")
+    r.commit("Claim it (#5)\n\nClaims: 20261003-demo")
+    return expect(r.why("src/a.py:1"), 0, "Intent     20261003-demo  (draft)", "File       .intent/open/20261003-demo.md",
+                  "Open for claims.", absent=("not found",))
+
+
+@case("examples/inbox-demo/greet.sh: an intent in .intent/shipped/ (replica of #26)")
+def _(r):
+    shipped = ".intent/shipped/20261003-inbox-demo.md"
+    r.write(shipped, open(os.path.join(ROOT, shipped)).read())
+    r.write("examples/inbox-demo/greet.sh", open(os.path.join(ROOT, "examples/inbox-demo/greet.sh")).read())
+    r.commit("Inbox demo: greet (pass) (#26)\n\nIntent: 20261003-inbox-demo\nClaims: 20261003-inbox-demo")
+    problems, out = expect(r.why("examples/inbox-demo/greet.sh:1"), 0, "20261003-inbox-demo  (shipped)",
+                           "File       .intent/shipped/20261003-inbox-demo.md", "hello from the intent inbox")
+    real = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT, capture_output=True, text=True)
+    if real.returncode == 0 and real.stdout.strip() == "false":  # full clone of this repo: check the real line too
+        res = subprocess.run([sys.executable, WHY, "--no-gh", "examples/inbox-demo/greet.sh:1"], cwd=ROOT,
+                             capture_output=True, text=True, env=ENV)
+        p2, o2 = expect((res.returncode, res.stdout + res.stderr), 0, "File       .intent/shipped/20261003-inbox-demo.md")
+        problems, out = problems + p2, out + o2
+    return problems, out
+
+
+@case("--init writes today's template, and the gate can parse it")
+def _(r):
+    iid = f"{datetime.date.today():%Y%m%d}-rate-limit-login"
+    os.makedirs(os.path.join(r.d, "src"))
+    code, out = r.why("--init", "rate-limit-login")
+    path = os.path.join(r.d, ".intent", iid + ".md")
+    problems = [f"exit {code}"] if code else []
+    if not os.path.exists(path):
+        return problems + ["no file written"], out
+    text = open(path).read()
+    problems += [f"missing {n!r}" for n in (f"id: {iid}", "status: draft", "# Rate limit login", "## Not", "check: `")
+                 if n not in text]
+    fm, _, sections = intent_check.parse(text)
+    problems += [] if fm.get("touches") == ["src/"] and intent_check.done_when_checks(sections) else ["template doesn't parse"]
+    p2, o2 = expect(r.why("--init", "rate-limit-login"), 2, "already exists")
+    p3, o3 = expect(r.why("--init", "Bad Slug"), 2, "usage: git why --init")
+    return problems + p2 + p3, out + o2 + o3
 
 
 fails = 0

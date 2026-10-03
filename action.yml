@@ -26,6 +26,15 @@ inputs:
   require-proof:
     description: Fail PRs that carry no sealed session proof (.proof/<intent>.json).
     default: "false"
+  exempt-authors:
+    description: Comma-separated logins whose PRs don't need an intent. The gate passes with a notice.
+    default: "dependabot[bot],renovate[bot]"
+  exempt-paths:
+    description: Comma- or newline-separated globs, e.g. "**/*.md". A PR that only changes matching files doesn't need an intent.
+    default: ""
+  skip-label:
+    description: A PR with this label doesn't need an intent. Set to "" to turn it off.
+    default: "no-intent"
 outputs:
   intent:
     description: The intent id this PR is about (empty if none was found).
@@ -72,8 +81,15 @@ runs:
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         BASE_REPO: ${{ github.repository }}
         STRICT_TOUCHES: ${{ inputs.strict-touches }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        EXEMPT_AUTHORS: ${{ inputs.exempt-authors }}
+        EXEMPT_PATHS: ${{ inputs.exempt-paths }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
       run: |
-        args=(--base "$BASE" --head "$HEAD" --pr-body-file "$RUNNER_TEMP/intent_pr_body.md")
+        args=(--base "$BASE" --head "$HEAD" --pr-body-file "$RUNNER_TEMP/intent_pr_body.md"
+              "--author=$PR_AUTHOR" "--labels=$PR_LABELS" "--exempt-authors=$EXEMPT_AUTHORS"
+              "--exempt-paths=$EXEMPT_PATHS" "--skip-label=$SKIP_LABEL")
         if [ "$RUN_CHECKS" = "true" ] && [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$BASE_REPO" ] && [ "$RUN_CHECKS_FORKS" != "true" ]; then
           echo "::notice title=intent-check::PR from fork $HEAD_REPO: skipping check: commands (set run-checks-on-forks: true to run them)."
           RUN_CHECKS=false

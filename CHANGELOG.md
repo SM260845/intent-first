@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.1.2
+
+- `supersedes:` can point at an intent in `.intent/shipped/` (#37 by @kkinsen0314-alt, fixes #31).
+- New inputs to skip the gate: `exempt-authors` (default `dependabot[bot],renovate[bot]`), `exempt-paths` (globs) and `skip-label` (default `no-intent`). A skipped PR passes with a notice that says why. A PR that changes `.intent/` is never skipped.
+- `git why` finds intents in `.intent/open/` and `.intent/shipped/`, and reads `Claims: <id>` like `Intent: <id>`, so code shipped through the Inbox can be traced.
+- `git why --init <slug>` writes today's intent template.
+- `touches:` can be a YAML block list, and section headings match regardless of case. The `intent` output stays empty for an id that doesn't exist.
+- Plainer notice when a PR has no agent session proof. The "How to fix" link points at a real section.
+- README rewritten around the core loop, with a new GIF from a real run, `git blame` vs `git why`, when not to use it, and a comparison table. The Intent Inbox moved to `docs/inbox.md`. New `docs/AGENTS-snippet.md` for coding agents.
+
 ## v1.1.1
 
 - intent-intake counts only approvals from owners, members and collaborators, never the PR author's own, and gates any change to `.intent/open/`.
