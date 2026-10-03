@@ -44,6 +44,10 @@ cases = [
      plan([dict(PRS[0], state="closed", merged_at="2026-10-03T00:00:00Z")] + PRS[1:], "20261003-demo", 2)[0] is False),
     ("in-scope files may auto-merge", out_of_scope(["examples/inbox-demo/greet.sh"], ["examples/inbox-demo/"]) == []),
     ("files outside touches block auto-merge", out_of_scope(["scripts/x.py"], ["examples/inbox-demo/"]) == ["scripts/x.py"]),
+    ("the job's own open/ -> shipped/ move is exempt",
+     out_of_scope([".intent/open/X.md", ".intent/shipped/X.md", "examples/a"], ["examples/"], moved="X") == []),
+    ("only that move is exempt",
+     out_of_scope([".intent/open/X.md", ".intent/shipped/X.md"], ["examples/"], moved="Y") != []),
     ("workflow changes block auto-merge", out_of_scope([".github/workflows/x.yml"], [".github/"]) != []),
 ]
 fails = 0

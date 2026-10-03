@@ -1,6 +1,6 @@
 ---
 id: 20261003-inbox-demo
-status: draft
+status: shipped
 touches: [examples/inbox-demo/]
 ---
 # Inbox demo: greet from the intent inbox

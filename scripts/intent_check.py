@@ -186,7 +186,7 @@ def main():
     print(f"base {base[:12]}  head {a.head[:12]}  files changed: {len(changes)}")
 
     # --- 1. schema of every intent file this PR adds or modifies
-    added, modified, inbox = {}, {}, {}
+    added, modified, inbox, moved = {}, {}, {}, {}
     for status, path in intent_changes:
         stem = os.path.basename(path)
         stem = stem[:-3] if stem.endswith(".md") else stem
@@ -200,6 +200,8 @@ def main():
         fm = validate(path, text)
         if path.startswith(OPEN_DIR):
             inbox[stem] = (path, fm)
+        elif status == "A" and path.startswith(SHIPPED_DIR) and ("D", f"{OPEN_DIR}{stem}.md") in intent_changes:
+            moved[stem] = (path, fm)
         else:
             (added if status == "A" else modified)[stem] = (path, fm)
 
@@ -249,9 +251,11 @@ def main():
             err(f"Claims: {c} needs its check: lines to run, and they were skipped (fork PR or run-checks: false).")
 
     ids = set(added) | set(modified) | refs | claims
+    if not ids and len(moved) == 1:  # a lone open/ -> shipped/ move is about that intent, so its checks run
+        ids = set(moved)
     # --- 1. the gate: exactly ONE intent
-    if len(ids) == 0 and inbox:
-        note(f"Adds or edits inbox intents only: {', '.join(sorted(inbox))}")
+    if len(ids) == 0 and (inbox or moved):
+        note(f"Adds, edits or moves inbox intents only: {', '.join(sorted(set(inbox) | set(moved)))}")
     elif len(ids) == 0:
         err("No intent. Add one .intent/YYYYMMDD-slug.md, or reference an existing draft with an 'Intent: <id>' line in the PR body or a commit trailer.")
     elif len(ids) > 1:
@@ -282,6 +286,8 @@ def main():
             fm = added[intent_id][1]
         elif intent_id in modified:
             fm = modified[intent_id][1]
+        elif intent_id in moved:
+            fm = moved[intent_id][1]
         elif intent_id in claims:
             fm = claim_fm
         else:

@@ -3,11 +3,13 @@
 
 Usage:
   python3 scripts/intent_inbox.py open   # on push to the default branch: one issue per intent added to .intent/open/
-  python3 scripts/intent_inbox.py ship   # on workflow_run (completed): merge the first passing claim, close the
-                                         # competing claims and the issue, move the intent to .intent/shipped/
+  python3 scripts/intent_inbox.py ship   # on workflow_run (completed): commit the move to .intent/shipped/ onto the
+                                         # first passing claim's branch, re-run CI on it, squash-merge that exact SHA,
+                                         # then close the competing claims and the issue
 
 Env: GITHUB_TOKEN, GITHUB_REPOSITORY, BEFORE and AFTER (open), RUN_ID (ship),
-INBOX_ASSIGNEES (optional, comma-separated logins for new issues).
+INBOX_ASSIGNEES (optional, comma-separated logins for new issues),
+FORK_TOKEN (optional: pushes the move to the default branch after merging a fork claim).
 Never checks out or runs pull request code. No dependencies beyond Python 3 and git.
 """
 import base64
@@ -16,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -28,6 +31,7 @@ R = f"/repos/{REPO}"
 API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 SERVER = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
+FORK_TOKEN = os.environ.get("FORK_TOKEN", "")
 MARKER_RE = re.compile(r"<!-- intent-inbox: (\S+) -->")
 
 
@@ -67,10 +71,12 @@ def issue_for(id_, text, path):
     return title, f"<!-- intent-inbox: {id_} -->\nIntent [`{id_}`]({link}) is open.\n\n{body}\n\n---\n\n{how}\n"
 
 
-def out_of_scope(files, touches):
-    """Changed files that block an auto-merge: outside touches:, or under .intent/ or .github/."""
+def out_of_scope(files, touches, moved=None):
+    """Changed files that block an auto-merge: outside touches:, or under .intent/ or .github/.
+    `moved` exempts exactly the open/ -> shipped/ rename of that intent, which only the ship job commits."""
     scope = touches if isinstance(touches, list) else []
-    return [f for f in files if f.startswith((".intent/", ".github/"))
+    exempt = {f"{OPEN_DIR}{moved}.md", f"{SHIPPED_DIR}{moved}.md"} if moved else set()
+    return [f for f in files if f not in exempt and f.startswith((".intent/", ".github/"))
             or not any(f == t or f.startswith(t.rstrip("/") + "/") for t in scope)]
 
 
@@ -99,10 +105,16 @@ def api(method, path, data=None, soft=False):
         raise SystemExit(msg)
 
 
+def redact(text):
+    for t in (TOKEN, FORK_TOKEN):
+        text = text.replace(t, "***") if t else text
+    return text
+
+
 def git(*args):
     r = subprocess.run(["git", *args], capture_output=True, text=True)
     if r.returncode:
-        raise SystemExit(f"git {args[0]} failed: {r.stderr.replace(TOKEN, '***').strip()}")
+        raise SystemExit(f"git {args[0]} failed: {redact(r.stderr).strip()}")
     return r.stdout
 
 
@@ -149,33 +161,41 @@ def cmd_open():
                       "Copilot coding agent needs a user token in `token:` (see README).")
 
 
-def move(id_, branch, n):
-    """Commit the move open/ -> shipped/ on the default branch. False if the push is refused."""
+def commit_move(token, ref, id_, n, parent=None):
+    """Commit the open/ -> shipped/ move on top of branch `ref` and push it. Returns (sha, error)."""
     src, dst = f"{OPEN_DIR}{id_}.md", f"{SHIPPED_DIR}{id_}.md"
-    url = SERVER.replace("://", f"://x-access-token:{TOKEN}@", 1) + f"/{REPO}.git"
-    why = ""
-    for _ in range(2):
-        git("fetch", "-q", url, branch)
-        git("checkout", "-q", "-B", "intent-inbox-ship", "FETCH_HEAD")
-        if not os.path.exists(src):
-            return True
-        os.makedirs(SHIPPED_DIR, exist_ok=True)
-        git("mv", src, dst)
-        with open(dst, encoding="utf-8") as f:
-            text = re.sub(r"^status:\s*draft\s*$", "status: shipped", f.read(), count=1, flags=re.M)
-        with open(dst, "w", encoding="utf-8") as f:
-            f.write(text)
-        git("add", dst)
-        git("-c", "user.name=github-actions[bot]", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-            "commit", "-qm", f"Ship {id_}\n\nIntent: {id_}\nShipped-by: #{n}")
-        r = subprocess.run(["git", "push", "-q", url, f"HEAD:refs/heads/{branch}"], capture_output=True, text=True)
-        if r.returncode == 0:
-            print(f"moved {src} -> {dst}")
-            return True
-        why = r.stderr.replace(TOKEN, "***").strip()[:300]
-    print(f"::error title=intent-inbox::Merged #{n}, but could not push the move of {src} to {dst} on {branch}: {why}. "
-          "Move it by hand, or give the inbox a token that may push to the branch (see README).")
-    return False
+    url = SERVER.replace("://", f"://x-access-token:{token}@", 1) + f"/{REPO}.git"
+    git("fetch", "-q", url, ref)
+    git("checkout", "-q", "-B", "intent-inbox-ship", "FETCH_HEAD")
+    if parent and git("rev-parse", "HEAD").strip() != parent:
+        return None, f"{ref} moved past {parent[:12]}"
+    if not os.path.exists(src):
+        return None, f"{src} is not on {ref}"
+    os.makedirs(SHIPPED_DIR, exist_ok=True)
+    git("mv", src, dst)
+    with open(dst, encoding="utf-8") as f:
+        text = re.sub(r"^status:\s*draft\s*$", "status: shipped", f.read(), count=1, flags=re.M)
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write(text)
+    git("add", dst)
+    git("-c", "user.name=github-actions[bot]", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+        "commit", "-qm", f"Ship {id_}\n\nIntent: {id_}\nShipped-by: #{n}")
+    r = subprocess.run(["git", "push", "-q", url, f"HEAD:refs/heads/{ref}"], capture_output=True, text=True)
+    if r.returncode:
+        return None, redact(r.stderr).strip()[:300]
+    return git("rev-parse", "HEAD").strip(), ""
+
+
+def rerun(workflow_id, ref, sha):
+    """Re-run the CI workflow on the claim branch after the move commit (a GITHUB_TOKEN push triggers no run).
+    Returns the run's conclusion and URL."""
+    api("POST", f"{R}/actions/workflows/{workflow_id}/dispatches", {"ref": ref})
+    for _ in range(60):
+        time.sleep(15)
+        runs = api("GET", f"{R}/actions/workflows/{workflow_id}/runs?head_sha={sha}&event=workflow_dispatch")["workflow_runs"]
+        if runs and runs[0]["status"] == "completed":
+            return runs[0]["conclusion"], runs[0]["html_url"]
+    return "timed out", ""
 
 
 def cmd_ship():
@@ -200,22 +220,45 @@ def cmd_ship():
     text = base64.b64decode(got["content"]).decode("utf-8")
     if not checks_of(text):
         return print(f"{id_} has no check: lines, so it can't be claimed")
-    files = [f["filename"] for f in api("GET", f"{R}/pulls/{n}/files?per_page=100")]
-    blocked = out_of_scope(files, parse(text)[0].get("touches"))
+    touches = parse(text)[0].get("touches")
+    blocked = out_of_scope([f["filename"] for f in api("GET", f"{R}/pulls/{n}/files?per_page=100")], touches)
     if blocked:
         print(f"::warning title=intent-inbox::Not auto-merging #{n}: {', '.join(blocked)} outside touches: "
               "or under .intent/ or .github/. A human can review and merge it.")
         return
+    same_repo = (pr["head"]["repo"] or {}).get("full_name") == REPO
+    if same_repo:  # the move lands inside the merge: commit it on the claim branch, re-run CI, merge that SHA
+        sha, why = commit_move(TOKEN, pr["head"]["ref"], id_, n, parent=sha)
+        if not sha:
+            return print(f"::error title=intent-inbox::Could not commit the move onto #{n}: {why}") or 1
+        conclusion, url = rerun(run["workflow_id"], pr["head"]["ref"], sha)
+        if conclusion != "success":
+            api("POST", f"{R}/issues/{n}/comments", {"body": f"Committed the move of `{id_}` to `.intent/shipped/`, "
+                                                      f"but CI on that commit ended `{conclusion}` ({url}). Not merging."})
+            return 1
+        files = [f["filename"] for f in api("GET", f"{R}/pulls/{n}/files?per_page=100")]
+        if out_of_scope(files, touches, moved=id_):
+            return print(f"::error title=intent-inbox::#{n} changed after the move commit; not merging") or 1
     api("PUT", f"{R}/pulls/{n}/merge", {"merge_method": "squash", "sha": sha, "commit_title": f"{pr['title']} (#{n})",
                                          "commit_message": f"Intent: {id_}\nClaims: {id_}\nHead: {sha}"})
-    print(f"merged #{n} for {id_}")
+    print(f"merged #{n} at {sha[:12]} for {id_}")
     for c in competitors:
         close(c, f"Closing: #{n} claimed `{id_}` and passed its checks first, so it was merged.")
     issue = find_issue(id_, "open")
     if issue:
         api("POST", f"{R}/issues/{issue['number']}/comments", {"body": f"Shipped in #{n}."})
         api("PATCH", f"{R}/issues/{issue['number']}", {"state": "closed", "state_reason": "completed"})
-    return 0 if move(id_, branch, n) else 1
+    if same_repo:
+        return 0
+    why = "a fork branch can't take the move commit and no INTENT_INBOX_TOKEN is set"
+    if FORK_TOKEN:
+        for _ in range(2):
+            moved, why = commit_move(FORK_TOKEN, branch, id_, n)
+            if moved:
+                return print(f"moved {id_} to {SHIPPED_DIR} on {branch}")
+    api("POST", f"{R}/issues/{n}/comments", {"body": f"Merged. `{OPEN_DIR}{id_}.md` stays in `{OPEN_DIR}` because {why}. "
+                                              f"Move it to `{SHIPPED_DIR}` by hand."})
+    return 1
 
 
 if __name__ == "__main__":

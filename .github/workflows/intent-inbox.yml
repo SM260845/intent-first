@@ -4,7 +4,9 @@ name: intent-inbox
 # "Claims: <id>". proof-carrying-pr runs the intent's check: lines on that PR
 # (untrusted, read-only token). The ship job below is the trusted half: it runs
 # on workflow_run with code from the default branch only, never checks out the
-# PR, and merges the first passing claim.
+# PR, and merges the first passing claim. It commits the intent's move to
+# .intent/shipped/ onto the claim branch, re-runs proof-carrying-pr there and
+# squash-merges that exact SHA, so nothing is pushed to main directly.
 on:
   push:
     branches: [main]
@@ -33,11 +35,11 @@ jobs:
     if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     concurrency: {group: intent-inbox-ship, cancel-in-progress: false}
-    permissions: {contents: write, pull-requests: write, issues: write, actions: read}
+    permissions: {contents: write, pull-requests: write, issues: write, actions: write}
     steps:
       - uses: actions/checkout@v5   # the default branch; the PR's code is never checked out here
         with: {persist-credentials: false}
       - uses: ./inbox
         with:
           mode: ship
-          # token: ${{ secrets.INTENT_INBOX_TOKEN }}    # if the default branch is protected
+          fork-token: ${{ secrets.INTENT_INBOX_TOKEN }}   # optional, only for fork claims
