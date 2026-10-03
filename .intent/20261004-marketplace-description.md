@@ -1,6 +1,6 @@
 ---
 id: 20261004-marketplace-description
-status: open
+status: shipped
 touches: [action.yml]
 ---
 # Shorten the action description for the Marketplace
