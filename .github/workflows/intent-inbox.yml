@@ -1,12 +1,12 @@
 name: intent-inbox
 
-# Intent Inbox. A human adds .intent/open/<id>.md; anyone opens a PR with
-# "Claims: <id>". proof-carrying-pr runs the intent's check: lines on that PR
-# (untrusted, read-only token). The ship job below is the trusted half: it runs
-# on workflow_run with code from the default branch only, never checks out the
-# PR, squash-merges the first passing claim at the SHA that passed, and closes
-# the issue with the `shipped` label. Intent files never move. New intents are
-# gated at intake instead (intent-intake.yml).
+# Intent Inbox. A maintainer approves an intent into .intent/open/; anyone opens
+# a PR with "Claims: <id>". proof-carrying-pr runs the intent's check: lines on
+# that PR (untrusted, read-only token). The jobs below are the trusted half: they
+# run with code from the default branch only and never check out the PR. `claims`
+# lists the passing claims (from the run that just finished, or every open claim
+# on the sweep), and `ship` merges each one at the SHA that passed, one job per
+# intent at a time. Intent files never move; a closed issue means not claimable.
 on:
   push:
     branches: [main]
@@ -14,6 +14,9 @@ on:
   workflow_run:
     workflows: [proof-carrying-pr]
     types: [completed]
+  schedule:
+    - cron: "*/30 * * * *"   # sweep: retry passing claims that weren't merged
+  workflow_dispatch:
 
 permissions: {}
 
@@ -30,13 +33,29 @@ jobs:
           mode: open
           # assignees: copilot-swe-agent[bot]   # optional; needs a user token in token: (see README)
 
-  ship:
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+  claims:
+    if: github.event_name != 'push' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
-    concurrency: {group: intent-inbox-ship, cancel-in-progress: false}
+    permissions: {contents: read, pull-requests: read, actions: read}
+    outputs: {claims: "${{ steps.c.outputs.claims }}"}
+    steps:
+      - uses: actions/checkout@v5   # the default branch
+        with: {persist-credentials: false}
+      - id: c
+        uses: ./inbox
+        with: {mode: claims, workflow: proof-carrying-pr.yml}
+
+  ship:
+    needs: claims
+    if: needs.claims.outputs.claims != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: {include: "${{ fromJSON(needs.claims.outputs.claims) }}"}
+    concurrency: {group: "intent-inbox-ship-${{ matrix.intent }}", cancel-in-progress: false}
     permissions: {contents: write, pull-requests: write, issues: write, actions: read}
     steps:
       - uses: actions/checkout@v5   # the default branch; the PR's code is never checked out here
         with: {persist-credentials: false}
       - uses: ./inbox
-        with: {mode: ship}
+        with: {mode: ship, run-id: "${{ matrix.run }}", protect: "action.yml,inbox/,scripts/"}

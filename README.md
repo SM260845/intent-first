@@ -1,81 +1,25 @@
-# Intent-First Repos
+# intent-first
 
-> Commit the why. Code is regenerable.
+Commit the why: every pull request carries a short intent file, and CI checks the change against it.
 
-[![intent-check](https://github.com/ao3575911/intent-first/actions/workflows/proof-carrying-pr.yml/badge.svg?branch=main)](https://github.com/ao3575911/intent-first/actions/workflows/proof-carrying-pr.yml)
+[![CI](https://github.com/ao3575911/intent-first/actions/workflows/proof-carrying-pr.yml/badge.svg?branch=main)](https://github.com/ao3575911/intent-first/actions/workflows/proof-carrying-pr.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/ao3575911/intent-first)](https://github.com/ao3575911/intent-first/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/ao3575911/intent-first)](LICENSE)
 
-Original essay: [gist](https://gist.github.com/ao3575911/fa15e887ec30e64129bb8e072d295319). This README holds the current rules, revised after dogfooding.
+![Intent Inbox: replay of the real demo run, where claim #24 fails, claim #26 passes and is merged, and issue #25 is closed](docs/inbox-demo.gif)
 
-## Install in 30 seconds
+## Why
 
-**1. Add the gate** as `.github/workflows/intent-check.yml`, then make `intent-check` a required status check:
+Git records what changed, not why. When agents write the diff, the instruction behind it is the part worth keeping, and it usually ends up in a chat log. intent-first keeps it in the repo as a small, reviewed file, and CI holds every pull request to it.
 
-```yaml
-name: intent-check
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited]
-permissions:
-  contents: read
-jobs:
-  intent-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with: {fetch-depth: 0}
-      - uses: ao3575911/intent-first@v1
-        # with: {strict-touches: "true"}   # fail, not warn, on paths outside touches:
-```
+## The intent format
 
-**2. Write your first intent** as `.intent/20261001-first-intent.md` in the same PR:
-
-```markdown
----
-id: 20261001-first-intent
-status: draft
-touches: [.github/, .intent/]
----
-# Adopt intent-first
-
-## Want
-Every PR states its intent.
-
-## Not
-No other changes.
-
-## Done when
-- The intent-check job passes on this PR
-```
-
-**3. Install `git why`** to go from any line to its intent:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/ao3575911/intent-first/v1/bin/git-why -o ~/.local/bin/git-why && chmod +x ~/.local/bin/git-why
-git why src/ratelimit.py:21   # commit, intent id, status, PR, supersede chain, Want / Not / Done when
-```
-
-Inputs: `base-ref`, `head-ref` (default: the PR's), `strict-touches` (default `false`), `run-checks` (default `true`), `run-checks-on-forks` (default `false`), `proof-check` (default `true`), `require-proof` (default `false`). Consumer example: [`examples/consumer/`](examples/consumer/) (formerly the `intent-first-consumer-test` repo). The [consumer-demo](.github/workflows/consumer-demo.yml) workflow runs the action against it on every push: the valid intent passes, the junk `hi` intent fails, and the job asserts both.
-
-> **Heads-up:** `run-checks` runs the `check:` commands written in the PR's intent, so it executes code from the PR author. It's skipped for PRs from forks unless you set `run-checks-on-forks: "true"`. Keep the workflow on `pull_request` (never `pull_request_target`) with a read-only token.
-
-## Problem
-
-Git records what changed, not why.
-Agents now write the diff. The instruction behind it is the valuable part, and it gets lost in a chat log.
-
-## Concept
-
-Every change ships with an **intent**: a short, versioned file that states the goal, the limits, and the proof.
-
-```
-.intent/
-  20260928-rate-limit-login.md
-```
+One file per change, at `.intent/YYYYMMDD-slug.md`:
 
 ```markdown
 ---
 id: 20260928-rate-limit-login
-status: draft            # draft -> shipped. Nothing else changes once shipped.
+status: draft
 touches: [src/, tests/]
 ---
 # Rate-limit failed logins
@@ -92,91 +36,51 @@ No CAPTCHA. No lockout for users who log in successfully.
 - p95 login latency unchanged
 ```
 
-Each commit or PR links back with a trailer:
+- **One PR, one intent.** A PR adds exactly one intent, or references one draft with an `Intent: <id>` line in the PR body or a commit trailer.
+- **Shipped is immutable.** Once `status: shipped` is on main, the file can't change. To change a decision, add a new intent with `supersedes: <old-id>`.
+- **Done when is checked.** CI runs each `check:` command and fails the PR on a non-zero exit. Bullets without one go to human review.
+- **Stay in scope.** Paths outside `touches:` get a warning, or fail with `strict-touches: "true"`.
 
+## Quickstart
+
+Add `.github/workflows/intent-check.yml`, then make `intent-check` a required status check:
+
+```yaml
+name: intent-check
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+jobs:
+  intent-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
+      - uses: ao3575911/intent-first@v1
 ```
-Intent: 20260928-rate-limit-login
-```
 
-## What changes
+Put your first intent in the same PR. If a PR carries a sealed agent session from [agent-session-recorder](https://github.com/ao3575911/agent-session-recorder) at `.proof/<intent-id>.json`, the action verifies it too.
 
-| Today | Intent-first |
-|---|---|
-| Review the diff | Review the intent, then verify the diff |
-| `git blame` says who | `git blame` leads to why |
-| Refactors are risky | Refactors are re-runs against the same intents |
-| Forks copy code | Forks copy decisions |
-| Docs drift | Intents are a log. Logs don't need updating |
-
-## Rules
-
-These are enforced by [`scripts/intent_check.py`](scripts/intent_check.py) via [`action.yml`](action.yml).
-
-1. **One PR, one intent.** A PR must be about exactly one intent. It can either
-   - add one new `.intent/*.md`, **or**
-   - reference one existing **draft** intent with `Intent: <id>` in the PR body or a commit trailer.
-
-   Adding a file isn't enough on its own. Zero intents fail, and so do two.
-2. **Schema.** Frontmatter needs `id`, `status` (`draft` | `shipped`), and `touches` (a list). The body needs a `# Title` and non-empty `## Want`, `## Not`, and `## Done when` sections, and Done when needs at least one `- ` bullet. `id` must equal the filename.
-3. **IDs are date-slugs.** `YYYYMMDD-short-slug.md`, e.g. `20260928-rate-limit-login.md`. You don't hand-pick numbers, so parallel branches don't collide.
-4. **Shipped is immutable.** A draft can be edited, and its `status` can flip `draft → shipped`. Once `status: shipped` is on `main`, CI rejects any edit, rename, or deletion of that file.
-5. **Supersede, never edit.** To change a shipped decision, add a new intent with `supersedes: <old-id>`. The old id must exist, and the old file must not change in that PR.
-6. **Humans own intents.** [`CODEOWNERS`](.github/CODEOWNERS) requires review from @ao3575911 on `.intent/`. Anyone (or any agent) can write code.
-7. **Done when is checkable where possible.** An indented ``check: `cmd` `` line under a bullet is run by CI, and a non-zero exit fails the PR. Bullets without `check:` go to human review and are listed in the job summary.
-8. **Stay in scope.** CI puts a warning annotation on every changed path outside the intent's `touches:`. It warns by default; `strict-touches: "true"` (`--touches=fail`) makes it fail.
-
-A junk intent (`.intent/hi.md` containing only `hi`) fails CI. That was the kill criterion for this design, and a self-test fixture checks it on every PR.
-
-## Adopt in four steps
-
-1. Create `.intent/` and write your first intent (`YYYYMMDD-slug.md`).
-2. Copy [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) (it asks for Intent ID, link, and Done when).
-3. Add the workflow from [Install in 30 seconds](#install-in-30-seconds), then mark `intent-check` as a required status check.
-4. Add `/.intent/ @your-team` to `.github/CODEOWNERS` and turn on "Require review from Code Owners".
-
-No framework. It's a folder, one dependency-free Python script, and a rule.
-
-Run it locally:
+To trace any line back to its intent, install `git why`:
 
 ```sh
-python3 scripts/intent_check.py --base origin/main --head HEAD --pr-body-file pr.md
-python3 scripts/test_intent_check.py   # fixtures for every rule
+curl -fsSL https://raw.githubusercontent.com/ao3575911/intent-first/v1/bin/git-why -o ~/.local/bin/git-why && chmod +x ~/.local/bin/git-why
+git why src/ratelimit.py:21   # commit, intent, status, PR, and its Want / Not / Done when
 ```
-
-> **Security note:** `check:` commands come from the PR itself. The workflow runs on `pull_request` with a read-only `contents` token and no secrets, so fork PRs can't reach anything privileged. Don't switch it to `pull_request_target`.
-
-## Proof-carrying PRs
-
-An intent says why. A proof bundle shows how the agent got there, and CI checks both against the diff.
-
-```sh
-agent-session-recorder bundle <sessionId> --intent 20260928-rate-limit-login --timestamp
-git add .proof/ && git commit -m "proof for 20260928-rate-limit-login"
-```
-
-`bundle` (from [agent-session-recorder](https://github.com/ao3575911/agent-session-recorder)) writes a `proof.link` event naming the intent and the current commit into the sealed session, Merkle-batches it with an RFC 3161 timestamp, and saves `.proof/<intent-id>.json`.
-
-[`scripts/proof_check.py`](scripts/proof_check.py) re-implements the verifier independently with no third-party Python packages, requires the `openssl` executable for RFC 3161 checks, and fails the PR if:
-
-- any session event was edited, dropped, inserted or reordered
-- any event isn't covered by a Merkle batch, or a timestamp doesn't cover its batch
-- the sealed link names a different intent or commit (a proof borrowed from another intent)
-- the intent file doesn't exist, or the linked commit isn't in the PR
-- code changed after the linked commit (only `.proof/` and `.intent/` may follow it)
-
-PRs without a bundle pass with a notice and are treated as human-authored. The bundle proves the session record wasn't altered. It doesn't prove the agent reported truthfully, or that the code is correct.
 
 ## Intent Inbox
 
-A human approves the intent. Any coding agent or person builds it, and CI picks the winner.
+Write the intent and let any coding agent or person build it. CI picks the winner.
 
-1. Anyone, human or agent, proposes an intent by PR into `.intent/open/<id>.md` (Want / Not / Done when, with `check:` lines). The `intent-intake` check fails until a human approves the PR's latest commit.
+1. Anyone proposes an intent by PR into `.intent/open/`. The `intent-intake` check fails until an owner, member or collaborator other than the PR author approves the PR's latest commit.
 2. Once it merges, the inbox opens an issue labelled `intent-open` with the intent and how to claim it.
-3. Anyone opens a PR with `Claims: <id>` in the body. intent-check runs that intent's `check:` lines on it.
-4. The first claiming PR whose CI passes is squash-merged, the other claiming PRs are closed with a comment, and the issue is closed with the `shipped` label and a link to the winner.
-5. Intent files never move. The issue carries the status.
+3. Claim PRs put `Claims: <id>` in the body, and intent-check runs that intent's `check:` lines on each one.
+4. The first claim whose CI passes is squash-merged at the SHA that passed, and the other claims are closed with a comment. A sweep every 30 minutes retries passing claims that weren't merged. A claim that's behind the base branch gets one comment asking for an update.
+5. The issue is closed with the `shipped` label. That closed issue is the record that the intent is done, so intent files never move or change. An intent can be claimed only while its issue is open: close the issue as not planned to retire it.
 
-Setup: keep the intent-check workflow from [Install](#install-in-30-seconds), add these two workflows (available from v1.1.0), and make `intent-intake` a required status check:
+Add two workflows, and make `intent-intake` a required status check. Turn on "Require branches to be up to date" too; the inbox waits for a behind claim to be updated instead of merging it stale.
 
 ```yaml
 # .github/workflows/intent-intake.yml
@@ -199,6 +103,8 @@ name: intent-inbox
 on:
   push: {branches: [main], paths: [".intent/open/**"]}
   workflow_run: {workflows: [intent-check], types: [completed]}   # the name of your intent-check workflow
+  schedule: [{cron: "*/30 * * * *"}]                              # the sweep
+  workflow_dispatch:
 permissions: {}
 jobs:
   open:
@@ -210,72 +116,78 @@ jobs:
         with: {fetch-depth: 0, persist-credentials: false}
       - uses: ao3575911/intent-first/inbox@v1
         with: {mode: open}
-  ship:
-    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+  claims:
+    if: github.event_name != 'push' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
-    concurrency: {group: intent-inbox-ship, cancel-in-progress: false}
+    permissions: {pull-requests: read, actions: read}
+    outputs: {claims: "${{ steps.c.outputs.claims }}"}
+    steps:
+      - id: c
+        uses: ao3575911/intent-first/inbox@v1
+        with: {mode: claims, workflow: intent-check.yml}   # the file name of that workflow
+  ship:
+    needs: claims
+    if: needs.claims.outputs.claims != '[]'
+    runs-on: ubuntu-latest
+    strategy: {fail-fast: false, matrix: {include: "${{ fromJSON(needs.claims.outputs.claims) }}"}}
+    concurrency: {group: "intent-inbox-ship-${{ matrix.intent }}", cancel-in-progress: false}
     permissions: {contents: write, pull-requests: write, issues: write, actions: read}
     steps:
       - uses: ao3575911/intent-first/inbox@v1
-        with: {mode: ship}
+        with: {mode: ship, run-id: "${{ matrix.run }}"}   # protect: "scripts/" keeps claims out of more paths
 ```
 
-Safety:
+An intent without `check:` lines can't be claimed: its issue says so, and claim PRs fail. To assign each new issue to Copilot coding agent, set `assignees: copilot-swe-agent[bot]` on the `open` step. That needs a user token in `token:` and a Copilot plan that includes the coding agent.
 
-- New intents are gated at intake. A PR that adds to `.intent/open/` needs an approving review from a non-bot account on its latest commit. A new commit needs a new approval, and a later "changes requested" cancels it.
-- Intents are immutable once merged. Editing, moving or deleting a file in `.intent/open/` fails intent-check, so propose a new intent instead.
-- An intent without `check:` lines can't be claimed. The issue says so, claiming PRs fail, and nothing is merged.
-- A claim PR can't change `.intent/`. Its checks run in the untrusted `pull_request` job with a read-only token and the same fork rule as `run-checks`. A fork claim whose checks were skipped fails, so it never merges.
-- The `ship` job is the trusted half. It runs on `workflow_run` with pinned code, never checks out the PR, and re-reads the claim, the head SHA and the changed files through the API. It merges that exact SHA, and only if every changed file is inside the intent's `touches:` and none is under `.intent/` or `.github/`. It pushes nothing, so the default `GITHUB_TOKEN` is enough. Required reviews block the merge, which leaves the PR for a human.
-- An intent counts as shipped once its issue is closed with the `shipped` label. Later claims are closed.
+## Inputs
 
-Optional agent assignment: set `assignees: copilot-swe-agent[bot]` on the `open` step to assign each new issue to Copilot coding agent. GitHub only accepts this with a user token (`token:` set to a PAT with Issues write) and a Copilot plan that includes the coding agent. Without it, issues stay unassigned and any agent can claim them.
+`ao3575911/intent-first@v1` ([action.yml](action.yml)):
 
-## Layout
+<!-- generated from action.yml -->
+| Input | Default | Description |
+|---|---|---|
+| `base-ref` | `""` | Base commit or ref to diff against. Defaults to the pull request's base SHA. |
+| `head-ref` | `""` | Head commit or ref to check. Defaults to the pull request's head SHA. |
+| `strict-touches` | `false` | Fail (instead of warn) when a changed path is outside the intent's `touches:` list. |
+| `run-checks` | `true` | Also run the `check:` commands listed in the intent's "Done when" section. |
+| `run-checks-on-forks` | `false` | Also run `check:` commands on pull requests from forks. They are code written by the PR author, so this is off by default. |
+| `proof-check` | `true` | Also verify sealed agent session proofs (.proof/<intent>.json) when a PR carries one. |
+| `require-proof` | `false` | Fail PRs that carry no sealed session proof (.proof/<intent>.json). |
 
-| Path | What it is |
-|---|---|
-| `action.yml` | The composite action (intent-check, then proof-check) |
-| `scripts/` | `intent_check.py`, `proof_check.py` and their self-tests |
-| `inbox/` | The Intent Inbox action: gate intake, open an issue per intent, ship the first passing claim |
-| `bin/git-why` | `git why <file>:<line>` |
-| `.intent/` | This repo's own intents. `open/` holds inbox intents, whose status is on their issue. `shipped/` holds one older inbox intent |
-| `examples/consumer/` | Example consumer repo, used by the `consumer-demo` workflow. Formerly `ao3575911/intent-first-consumer-test`, merged here with its history |
-| `src/`, `tests/` | The demo rate limiter used by the walkthrough PRs |
+Output: `intent`, the intent id the PR is about (empty if none was found).
 
-## Demo walkthrough
+`ao3575911/intent-first/inbox@v1` ([inbox/action.yml](inbox/action.yml)):
 
-The demo feature is a login rate limiter ([#1](https://github.com/ao3575911/intent-first/issues/1)). Five proof PRs exercise the gate:
+<!-- generated from inbox/action.yml -->
+| Input | Default | Description |
+|---|---|---|
+| `mode` | required | `intake` (on pull_request and pull_request_review), `open` (on push to the default branch), `claims` (on workflow_run, schedule or workflow_dispatch; outputs the passing claims) or `ship` (merges the claim whose run passed). |
+| `token` | `${{ github.token }}` | Token for the GitHub API. |
+| `assignees` | `""` | Optional comma-separated logins to assign each new intent issue to, e.g. copilot-swe-agent[bot]. Needs a user token. |
+| `workflow` | `""` | For `claims` on a schedule. The file name of the workflow that runs intent-check on claim PRs, e.g. intent-check.yml. |
+| `run-id` | `""` | For `ship`. The id of the CI run that passed. Defaults to the triggering workflow_run. |
+| `protect` | `""` | For `ship`. Comma-separated paths a claim may never change, on top of .intent/ and .github/, e.g. action.yml,scripts/. |
 
-| # | Proof | Expected | What it shows |
-|---|---|---|---|
-| [#5](https://github.com/ao3575911/intent-first/pull/5) | New intent + code | ✅ pass, merged | Adds `20260928-rate-limit-login` as `draft` with the limiter and tests |
-| [#6](https://github.com/ao3575911/intent-first/pull/6) | Follow-up on the same draft | ✅ pass, merged | No new file. References the draft via `Intent:`, fixes a bug, and flips it to `shipped` |
-| [#7](https://github.com/ao3575911/intent-first/pull/7) | Junk intent `hi` | ❌ fail (invalid intent) | The kill criterion |
-| [#8](https://github.com/ao3575911/intent-first/pull/8) | Edit a shipped intent's body | ❌ fail (immutability) | Shipped is append-only |
-| [#9](https://github.com/ao3575911/intent-first/pull/9) | Supersede | ✅ pass, merged | New intent with `supersedes:`; the old file is untouched |
+Output: `claims`, from `claims` mode: a JSON list of `{intent, run}`, the earliest passing claim per intent.
 
-Every PR body carries its `Intent:` id and commit SHA(s). Every merge commit carries an `Intent:` trailer and the merged head SHA. [#4](https://github.com/ao3575911/intent-first/pull/4) put this gate in place and went through the gate itself.
+## Security
 
-## Why now
+- `run-checks` runs the `check:` commands written in the PR's intent, so it runs code from the PR author. Keep the workflow on `pull_request` with a read-only token and no secrets. Don't switch it to `pull_request_target`.
+- PRs from forks skip `check:` commands unless `run-checks-on-forks` is `"true"`. A fork claim whose checks were skipped fails, so the inbox never merges it.
+- A PR that changes `.intent/open/` needs an approving review on its latest commit from an owner, member or collaborator other than the PR author. Bot approvals don't count, and a new commit needs a new approval.
+- The inbox's `claims` and `ship` jobs run code from the default branch, never check out the PR, and merge only the SHA that passed. A claim merges only if every changed file is inside the intent's `touches:` and none is under `.intent/`, `.github/` or a `protect:` path. They read every page of a PR's files; a PR with more than 3000 files is never merged or approved. Claim PRs can't change `.intent/`.
+- This repo runs its own gate and the intake check from the PR's base commit, so a PR can't rewrite the checker that judges it. Consumers get the same by pinning `@v1`.
+- A proof bundle shows that a session record wasn't altered. It doesn't show that the agent reported truthfully, or that the code is correct.
+- Report vulnerabilities privately through [GitHub private vulnerability reporting](https://github.com/ao3575911/intent-first/security/advisories/new).
 
-Code is becoming output. Intent is the source.
-A repo that keeps only output is a binary with comments.
+## Examples
 
-## One action for why, how and what
+[`examples/consumer/`](examples/consumer/) is a minimal consumer repo with a valid intent and a junk one. The [consumer-demo](.github/workflows/consumer-demo.yml) workflow runs the action against both on every push and asserts that the valid intent passes and the junk one fails. This repo's own [`.intent/`](.intent/) holds the intent behind every change to it.
 
-Other repos can use both gates in one step. Add `.intent/` files as usual, and have the agent run `agent-session-recorder bundle <session> --intent <id> --timestamp` before opening the PR:
+## Contributing
 
-```yaml
-on: {pull_request: {types: [opened, synchronize, reopened, edited]}}
-jobs:
-  gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with: {fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}"}
-      - uses: ao3575911/intent-first@v1   # intent-check, then proof-check
-        with: {run-checks: "true", require-proof: "false"}  # "true" fails PRs with no sealed session
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md). Every PR needs an intent file. [Good first issues](https://github.com/ao3575911/intent-first/labels/good%20first%20issue) are a good place to start.
 
-The intent says why, the sealed session in `.proof/<intent>.json` shows how the agent got there, and the diff is checked against both. PRs without a proof still need an intent and pass the proof step with a notice.
+## License
+
+[MIT](LICENSE)
