@@ -2,9 +2,9 @@
 
 > Commit the why. Code is regenerable.
 
-[![intent-check](https://github.com/SM260845/intent-first/actions/workflows/proof-carrying-pr.yml/badge.svg)](https://github.com/SM260845/intent-first/actions/workflows/proof-carrying-pr.yml)
+[![intent-check](https://github.com/ao3575911/intent-first/actions/workflows/proof-carrying-pr.yml/badge.svg?branch=main)](https://github.com/ao3575911/intent-first/actions/workflows/proof-carrying-pr.yml)
 
-Original essay: [gist](https://gist.github.com/SM260845/5db513ca90679e0d5845b601ae9e6a5c). This README holds the current rules, revised after dogfooding.
+Original essay: [gist](https://gist.github.com/ao3575911/fa15e887ec30e64129bb8e072d295319). This README holds the current rules, revised after dogfooding.
 
 ## Install in 30 seconds
 
@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: {fetch-depth: 0}
-      - uses: SM260845/intent-first@v1
+      - uses: ao3575911/intent-first@v1
         # with: {strict-touches: "true"}   # fail, not warn, on paths outside touches:
 ```
 
@@ -50,11 +50,13 @@ No other changes.
 **3. Install `git why`** to go from any line to its intent:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/SM260845/intent-first/v1/bin/git-why -o ~/.local/bin/git-why && chmod +x ~/.local/bin/git-why
+curl -fsSL https://raw.githubusercontent.com/ao3575911/intent-first/v1/bin/git-why -o ~/.local/bin/git-why && chmod +x ~/.local/bin/git-why
 git why src/ratelimit.py:21   # commit, intent id, status, PR, supersede chain, Want / Not / Done when
 ```
 
-Inputs: `base-ref`, `head-ref` (default: the PR's), `strict-touches` (default `false`), `run-checks` (default `true`), `proof-check` (default `true`), `require-proof` (default `false`). Live example: [SM260845/intent-first-consumer-test](https://github.com/SM260845/intent-first-consumer-test) (PR #1 passes, PR #2 with a junk `hi` intent fails).
+Inputs: `base-ref`, `head-ref` (default: the PR's), `strict-touches` (default `false`), `run-checks` (default `true`), `run-checks-on-forks` (default `false`), `proof-check` (default `true`), `require-proof` (default `false`). Live example: [ao3575911/intent-first-consumer-test](https://github.com/ao3575911/intent-first-consumer-test) (PR #1 passes, PR #2 with a junk `hi` intent fails).
+
+> **Heads-up:** `run-checks` runs the `check:` commands written in the PR's intent, so it executes code from the PR author. It's skipped for PRs from forks unless you set `run-checks-on-forks: "true"`. Keep the workflow on `pull_request` (never `pull_request_target`) with a read-only token.
 
 ## Problem
 
@@ -119,7 +121,7 @@ These are enforced by [`scripts/intent_check.py`](scripts/intent_check.py) via [
 3. **IDs are date-slugs.** `YYYYMMDD-short-slug.md`, e.g. `20260928-rate-limit-login.md`. You don't hand-pick numbers, so parallel branches don't collide.
 4. **Shipped is immutable.** A draft can be edited, and its `status` can flip `draft → shipped`. Once `status: shipped` is on `main`, CI rejects any edit, rename, or deletion of that file.
 5. **Supersede, never edit.** To change a shipped decision, add a new intent with `supersedes: <old-id>`. The old id must exist, and the old file must not change in that PR.
-6. **Humans own intents.** [`CODEOWNERS`](.github/CODEOWNERS) requires review from @SM260845 on `.intent/`. Anyone (or any agent) can write code.
+6. **Humans own intents.** [`CODEOWNERS`](.github/CODEOWNERS) requires review from @ao3575911 on `.intent/`. Anyone (or any agent) can write code.
 7. **Done when is checkable where possible.** An indented ``check: `cmd` `` line under a bullet is run by CI, and a non-zero exit fails the PR. Bullets without `check:` go to human review and are listed in the job summary.
 8. **Stay in scope.** CI puts a warning annotation on every changed path outside the intent's `touches:`. It warns by default; `strict-touches: "true"` (`--touches=fail`) makes it fail.
 
@@ -152,7 +154,7 @@ agent-session-recorder bundle <sessionId> --intent 20260928-rate-limit-login --t
 git add .proof/ && git commit -m "proof for 20260928-rate-limit-login"
 ```
 
-`bundle` (from [agent-session-recorder](https://github.com/SM260845/agent-session-recorder)) writes a `proof.link` event naming the intent and the current commit into the sealed session, Merkle-batches it with an RFC 3161 timestamp, and saves `.proof/<intent-id>.json`.
+`bundle` (from [agent-session-recorder](https://github.com/ao3575911/agent-session-recorder)) writes a `proof.link` event naming the intent and the current commit into the sealed session, Merkle-batches it with an RFC 3161 timestamp, and saves `.proof/<intent-id>.json`.
 
 [`scripts/proof_check.py`](scripts/proof_check.py) re-implements the verifier independently with no third-party Python packages, requires the `openssl` executable for RFC 3161 checks, and fails the PR if:
 
@@ -166,17 +168,17 @@ PRs without a bundle pass with a notice and are treated as human-authored. The b
 
 ## Demo walkthrough
 
-The demo feature is a login rate limiter ([#1](https://github.com/SM260845/intent-first/issues/1)). Five proof PRs exercise the gate:
+The demo feature is a login rate limiter ([#1](https://github.com/ao3575911/intent-first/issues/1)). Five proof PRs exercise the gate:
 
 | # | Proof | Expected | What it shows |
 |---|---|---|---|
-| [#5](https://github.com/SM260845/intent-first/pull/5) | New intent + code | ✅ pass, merged | Adds `20260928-rate-limit-login` as `draft` with the limiter and tests |
-| [#6](https://github.com/SM260845/intent-first/pull/6) | Follow-up on the same draft | ✅ pass, merged | No new file. References the draft via `Intent:`, fixes a bug, and flips it to `shipped` |
-| [#7](https://github.com/SM260845/intent-first/pull/7) | Junk intent `hi` | ❌ fail (schema) | The kill criterion |
-| [#8](https://github.com/SM260845/intent-first/pull/8) | Edit a shipped intent's body | ❌ fail (immutability) | Shipped is append-only |
-| [#9](https://github.com/SM260845/intent-first/pull/9) | Supersede | ✅ pass, merged | New intent with `supersedes:`; the old file is untouched |
+| [#5](https://github.com/ao3575911/intent-first/pull/5) | New intent + code | ✅ pass, merged | Adds `20260928-rate-limit-login` as `draft` with the limiter and tests |
+| [#6](https://github.com/ao3575911/intent-first/pull/6) | Follow-up on the same draft | ✅ pass, merged | No new file. References the draft via `Intent:`, fixes a bug, and flips it to `shipped` |
+| [#7](https://github.com/ao3575911/intent-first/pull/7) | Junk intent `hi` | ❌ fail (invalid intent) | The kill criterion |
+| [#8](https://github.com/ao3575911/intent-first/pull/8) | Edit a shipped intent's body | ❌ fail (immutability) | Shipped is append-only |
+| [#9](https://github.com/ao3575911/intent-first/pull/9) | Supersede | ✅ pass, merged | New intent with `supersedes:`; the old file is untouched |
 
-Every PR body carries its `Intent:` id and commit SHA(s). Every merge commit carries an `Intent:` trailer and the merged head SHA. [#4](https://github.com/SM260845/intent-first/pull/4) put this gate in place and went through the gate itself.
+Every PR body carries its `Intent:` id and commit SHA(s). Every merge commit carries an `Intent:` trailer and the merged head SHA. [#4](https://github.com/ao3575911/intent-first/pull/4) put this gate in place and went through the gate itself.
 
 ## Why now
 
@@ -195,7 +197,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: {fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}"}
-      - uses: SM260845/intent-first@v1   # intent-check, then proof-check
+      - uses: ao3575911/intent-first@v1   # intent-check, then proof-check
         with: {run-checks: "true", require-proof: "false"}  # "true" fails PRs with no sealed session
 ```
 

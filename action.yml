@@ -1,6 +1,6 @@
 name: Intent-First Gate
 description: One intent per PR. Checks the .intent/ file (Want / Not / Done when), runs its checks, and verifies any sealed agent session proof.
-author: SM260845
+author: ao3575911
 branding:
   icon: check-circle
   color: green
@@ -17,6 +17,9 @@ inputs:
   run-checks:
     description: Also run the `check:` commands listed in the intent's "Done when" section.
     default: "true"
+  run-checks-on-forks:
+    description: Also run `check:` commands on pull requests from forks. They are code written by the PR author, so this is off by default.
+    default: "false"
   proof-check:
     description: Also verify sealed agent session proofs (.proof/<intent>.json) when a PR carries one.
     default: "true"
@@ -65,9 +68,16 @@ runs:
         BASE: ${{ steps.refs.outputs.base }}
         HEAD: ${{ steps.refs.outputs.head }}
         RUN_CHECKS: ${{ inputs.run-checks }}
+        RUN_CHECKS_FORKS: ${{ inputs.run-checks-on-forks }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        BASE_REPO: ${{ github.repository }}
         STRICT_TOUCHES: ${{ inputs.strict-touches }}
       run: |
         args=(--base "$BASE" --head "$HEAD" --pr-body-file "$RUNNER_TEMP/intent_pr_body.md")
+        if [ "$RUN_CHECKS" = "true" ] && [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$BASE_REPO" ] && [ "$RUN_CHECKS_FORKS" != "true" ]; then
+          echo "::notice title=intent-check::PR from fork $HEAD_REPO: skipping check: commands (set run-checks-on-forks: true to run them)."
+          RUN_CHECKS=false
+        fi
         [ "$RUN_CHECKS" = "true" ] && args+=(--run-checks)
         [ "$STRICT_TOUCHES" = "true" ] && args+=(--touches=fail)
         python3 "$GITHUB_ACTION_PATH/scripts/intent_check.py" "${args[@]}"

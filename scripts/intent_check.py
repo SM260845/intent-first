@@ -136,7 +136,7 @@ def validate(path, text):
     if not re.search(r"^#\s+\S", body, re.M):
         err(f"{path}: missing '# Title'", path)
     for s in REQUIRED_SECTIONS:
-        content = [l for l in sections.get(s, []) if l.strip()]
+        content = [ln for ln in sections.get(s, []) if ln.strip()]
         if s not in sections:
             err(f"{path}: missing section '## {s}'", path)
         elif not content:
@@ -161,7 +161,7 @@ def main():
 
     base = git("merge-base", a.base, a.head).strip()
     diff = git("diff", "--name-status", "--no-renames", base, a.head).splitlines()
-    changes = [(l.split("\t", 1)[0][0], l.split("\t", 1)[1]) for l in diff if l.strip()]
+    changes = [(ln.split("\t", 1)[0][0], ln.split("\t", 1)[1]) for ln in diff if ln.strip()]
     intent_changes = [(s, p) for s, p in changes if p.startswith(INTENT_DIR)]
     code_paths = [p for s, p in changes if not p.startswith(INTENT_DIR)]
 
@@ -284,7 +284,7 @@ def main():
                 f.write("\n**How to fix:** add exactly one `.intent/YYYYMMDD-slug.md` with frontmatter "
                         "(`id`, `status`, `touches`) and non-empty `## Want`, `## Not`, `## Done when` sections, "
                         "or reference an existing draft with an `Intent: <id>` line in the PR body or a commit trailer. "
-                        "Rules: https://github.com/SM260845/intent-first#rules\n")
+                        "Rules: https://github.com/ao3575911/intent-first#rules\n")
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:
