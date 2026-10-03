@@ -70,9 +70,9 @@ class Repo:
 cases = []
 
 
-def case(name, expect):
+def case(name, expect, contains=""):
     def deco(fn):
-        cases.append((name, expect, fn))
+        cases.append((name, expect, contains, fn))
         return fn
     return deco
 
@@ -187,6 +187,31 @@ def _(r):
 @case("supersede unknown id", 1)
 def _(r):
     r.write(".intent/20260928-v2.md", intent("20260928-v2", extra="supersedes: 20250101-ghost"))
+    r.commit("x")
+
+
+def archive_base(r):
+    r.write(".intent/shipped/20260101-base.md", intent("20260101-base", "shipped", "[README.md]"))
+    r.rm(".intent/20260101-base.md")
+    r.commit("archive")
+    r.base = r.rev()
+
+
+@case("supersede archived intent, old untouched", 0,
+      contains="20260928-v2 supersedes 20260101-base (old file untouched)")
+def _(r):
+    archive_base(r)
+    r.write(".intent/20260928-v2.md", intent("20260928-v2", "shipped", "[README.md]", extra="supersedes: 20260101-base"))
+    r.write("README.md", "v2\n")
+    r.commit("x")
+
+
+@case("supersede archived intent but also edit old", 1,
+      contains=".intent/shipped/20260101-base.md: a superseded intent must stay untouched.")
+def _(r):
+    archive_base(r)
+    r.write(".intent/20260928-v2.md", intent("20260928-v2", extra="supersedes: 20260101-base"))
+    r.write(".intent/shipped/20260101-base.md", intent("20260101-base", "shipped", "[README.md]", want="Edited."))
     r.commit("x")
 
 
@@ -341,12 +366,12 @@ def _(r):
 
 
 fails = 0
-for name, expect, fn in cases:
+for name, expect, contains, fn in cases:
     r = Repo()
     res = fn(r) or ""
     body, extra = res if isinstance(res, tuple) else (res, [])
     code, out = r.check(body, extra)
-    ok = code == expect
+    ok = code == expect and contains in out
     fails += not ok
     print(f"{'ok  ' if ok else 'FAIL'} expect={'pass' if expect == 0 else 'fail'} got={'pass' if code == 0 else 'fail'}  {name}")
     if not ok:
